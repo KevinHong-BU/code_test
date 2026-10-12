@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">내 스케줄</string>
+    <string name="channel_name">일정 알림</string>
+    <string name="channel_description">설정한 시간에 일정을 알려줍니다.</string>
+</resources>
