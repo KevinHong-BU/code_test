@@ -1,0 +1,11 @@
+# Visual Studio
+.vs/
+*.user
+*.aps
+bin/
+obj/
+x64/
+Debug/
+Release/
+# CMake
+build/

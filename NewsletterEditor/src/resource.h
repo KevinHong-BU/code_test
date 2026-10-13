@@ -1,0 +1,38 @@
+﻿#pragma once
+
+#define IDI_APP 101
+
+// 컨트롤
+#define IDC_LIBRARY 1001
+#define IDC_TITLE 1002
+#define IDC_ISSUE 1003
+#define IDC_DATE 1004
+#define IDC_TODAY 1005
+#define IDC_THEME 1006
+#define IDC_PUBLISHER 1007
+#define IDC_GREETING 1008
+#define IDC_ARTICLE_LIST 1010
+#define IDC_CATEGORY 1011
+#define IDC_ART_TITLE 1012
+#define IDC_BODY 1013
+#define IDC_PREVIEW 1020
+#define IDC_STATUS 1021
+
+// 메뉴·단축키 명령
+#define IDM_NEW 2001
+#define IDM_NEW_SAMPLE 2002
+#define IDM_OPEN 2003
+#define IDM_SAVE 2004
+#define IDM_SAVE_AS 2005
+#define IDM_EXPORT_HTML 2006
+#define IDM_PRINT 2007
+#define IDM_EXIT 2008
+#define IDM_ADD_ARTICLE 2101
+#define IDM_DUPLICATE_ARTICLE 2102
+#define IDM_DELETE_ARTICLE 2103
+#define IDM_MOVE_UP 2104
+#define IDM_MOVE_DOWN 2105
+#define IDM_ZOOM_IN 2201
+#define IDM_ZOOM_OUT 2202
+#define IDM_ZOOM_FIT 2203
+#define IDM_ABOUT 2301
