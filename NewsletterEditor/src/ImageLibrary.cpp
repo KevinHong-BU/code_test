@@ -128,8 +128,77 @@ void ImageLibrary::Prune(const nl::Newsletter& doc) {
         for (const nl::Article& a : doc.articles) {
             for (const nl::Book& b : a.books) used = used || (!b.cover.empty() && b.coverId == it->first);
         }
+        used = used || (!doc.background.data.empty() && doc.background.id == it->first);
+        for (const auto& entry : doc.pageBackgrounds)
+            used = used || (!entry.second.data.empty() && entry.second.id == it->first);
         it = used ? std::next(it) : cache_.erase(it);
     }
+}
+
+void ImageLibrary::DrawBackground(HDC hdc, const nl::Background& bg, const RECT& rect, bool forPrint) {
+    if (bg.data.empty()) return;
+    Entry* entry = Get(bg.id, bg.data);
+    if (entry->failed) return;
+
+    POINT pts[2] = {{rect.left, rect.top}, {rect.right, rect.bottom}};
+    LPtoDP(hdc, pts, 2);
+    const int x = pts[0].x, y = pts[0].y, w = pts[1].x - pts[0].x, h = pts[1].y - pts[0].y;
+    if (w <= 0 || h <= 0) return;
+
+    int saved = SaveDC(hdc);
+    SetMapMode(hdc, MM_TEXT);
+    SetViewportOrgEx(hdc, 0, 0, nullptr);
+    SetWindowOrgEx(hdc, 0, 0, nullptr);
+    {
+        Gdiplus::Bitmap* bitmap = forPrint ? entry->full.get() : entry->screen.get();
+        const double bw = bitmap->GetWidth(), bh = bitmap->GetHeight();
+        Gdiplus::Graphics g(hdc);
+        g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        g.SetClip(Gdiplus::Rect(x, y, w, h));
+
+        // 진하기: 알파 값에 비율을 곱해 흐리게 그립니다(흰 쪽 바탕 위라서 옅어 보임).
+        Gdiplus::ColorMatrix matrix = {{{1, 0, 0, 0, 0},
+                                        {0, 1, 0, 0, 0},
+                                        {0, 0, 1, 0, 0},
+                                        {0, 0, 0, std::clamp(bg.opacity, nl::kMinOpacity, nl::kMaxOpacity) / 100.0f, 0},
+                                        {0, 0, 0, 0, 1}}};
+        Gdiplus::ImageAttributes attributes;
+        attributes.SetColorMatrix(&matrix);
+        attributes.SetWrapMode(Gdiplus::WrapModeTileFlipXY);
+
+        auto drawPart = [&](double dx, double dy, double dw, double dh, double sx, double sy, double sw, double sh) {
+            g.DrawImage(bitmap,
+                        Gdiplus::RectF(static_cast<Gdiplus::REAL>(dx), static_cast<Gdiplus::REAL>(dy),
+                                       static_cast<Gdiplus::REAL>(dw), static_cast<Gdiplus::REAL>(dh)),
+                        static_cast<Gdiplus::REAL>(sx), static_cast<Gdiplus::REAL>(sy), static_cast<Gdiplus::REAL>(sw),
+                        static_cast<Gdiplus::REAL>(sh), Gdiplus::UnitPixel, &attributes);
+        };
+        switch (bg.fit) {
+            case nl::BackgroundFit::Stretch:  // 쪽 크기에 맞춰 늘임(비율 무시)
+                drawPart(x, y, w, h, 0, 0, bw, bh);
+                break;
+            case nl::BackgroundFit::Contain: {  // 비율 유지, 그림 전체가 보이게 가운데
+                double s = std::min(w / bw, h / bh);
+                drawPart(x + (w - bw * s) / 2, y + (h - bh * s) / 2, bw * s, bh * s, 0, 0, bw, bh);
+                break;
+            }
+            case nl::BackgroundFit::Tile: {  // 바둑판: 쪽 너비의 1/4 크기로 반복
+                double tw = w / 4.0, th = tw * bh / bw;
+                for (double ty = y; ty < y + h; ty += th)
+                    for (double tx = x; tx < x + w; tx += tw) drawPart(tx, ty, tw, th, 0, 0, bw, bh);
+                break;
+            }
+            case nl::BackgroundFit::Cover:
+            default: {  // 비율 유지, 쪽을 빈틈없이 채우고 넘치는 부분은 잘라냄
+                double s = std::max(w / bw, h / bh);
+                double sw = w / s, sh = h / s;
+                drawPart(x, y, w, h, (bw - sw) / 2, (bh - sh) / 2, sw, sh);
+                break;
+            }
+        }
+    }
+    RestoreDC(hdc, saved);
 }
 
 void ImageLibrary::Draw(HDC hdc, int id, const std::string& data, const RECT& rect, bool forPrint) {

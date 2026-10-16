@@ -2,6 +2,7 @@
 // Windows API에 의존하지 않으므로 다른 플랫폼에서도 단위 테스트할 수 있습니다.
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,17 @@ struct Picture {
     int anchor = -1;       // HTML 내보내기용 기준 기사 번호(-1이면 맨 위). 파일에 저장하지 않음.
 };
 
+// 쪽 배경 그림. data가 비어 있으면 배경 없음.
+enum class BackgroundFit { Cover, Stretch, Contain, Tile };  // 채우기, 늘이기, 맞추기, 바둑판
+struct Background {
+    std::string data;                       // 그림 파일 내용
+    int id = 0;                             // 그림 캐시 키. 파일에 저장하지 않음.
+    int width = 0, height = 0;              // 원본 픽셀 크기
+    BackgroundFit fit = BackgroundFit::Cover;
+    int opacity = 30;                       // 진하기(%): 낮을수록 흐려서 글자가 잘 보임
+};
+constexpr int kMinOpacity = 5, kMaxOpacity = 100;
+
 // 반 포인트 단위 기본 크기와 허용 범위
 constexpr int kDefaultHeadingSize = 32;  // 16pt
 constexpr int kDefaultBodySize = 22;     // 11pt
@@ -83,8 +95,13 @@ struct Newsletter {
     int titleOffsetX = 0, titleOffsetY = 0;
     std::vector<Article> articles;
     std::vector<Picture> pictures;  // 뒤에 있을수록 위에 그려짐
+    Background background;          // 모든 쪽 배경
+    // 쪽별 배경(0부터 시작하는 쪽 번호). 항목이 있으면 모든 쪽 배경 대신 이것을 씀(빈 그림 = 배경 없음).
+    std::map<int, Background> pageBackgrounds;
 
-    int NextPictureId() const;  // 그림과 도서 표지를 통틀어 아직 쓰지 않은 번호
+    int NextPictureId() const;  // 그림·도서 표지·배경을 통틀어 아직 쓰지 않은 번호
+    // page쪽에 그릴 배경. 없으면 nullptr.
+    const Background* BackgroundFor(int page) const;
 };
 
 struct Color {

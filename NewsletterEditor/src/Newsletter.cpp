@@ -160,7 +160,15 @@ int Newsletter::NextPictureId() const {
     for (const Picture& p : pictures) id = std::max(id, p.id);
     for (const Article& a : articles)
         for (const Book& b : a.books) id = std::max(id, b.coverId);
+    id = std::max(id, background.id);
+    for (const auto& entry : pageBackgrounds) id = std::max(id, entry.second.id);
     return id + 1;
+}
+
+const Background* Newsletter::BackgroundFor(int page) const {
+    auto it = pageBackgrounds.find(page);
+    const Background& bg = it != pageBackgrounds.end() ? it->second : background;
+    return bg.data.empty() ? nullptr : &bg;
 }
 
 std::string Base64Encode(const std::string& bytes) {
@@ -561,6 +569,24 @@ std::string Serialize(const Newsletter& doc) {
         w += FromUtf8(Base64Encode(p.data));
         w += L'\n';
     }
+    auto putBackground = [&](const std::wstring& page, const Background& bg) {
+        w += L"\n[background]\n";
+        put(L"page", page);
+        if (bg.data.empty()) return;  // 이 쪽은 배경 없음
+        const wchar_t* fit = bg.fit == BackgroundFit::Stretch   ? L"stretch"
+                             : bg.fit == BackgroundFit::Contain ? L"contain"
+                             : bg.fit == BackgroundFit::Tile    ? L"tile"
+                                                                : L"cover";
+        put(L"fit", fit);
+        put(L"opacity", std::to_wstring(bg.opacity));
+        put(L"width", std::to_wstring(bg.width));
+        put(L"height", std::to_wstring(bg.height));
+        w += L"data=";
+        w += FromUtf8(Base64Encode(bg.data));
+        w += L'\n';
+    };
+    if (!doc.background.data.empty()) putBackground(L"all", doc.background);
+    for (const auto& entry : doc.pageBackgrounds) putBackground(std::to_wstring(entry.first), entry.second);
     return kBom + ToUtf8(w);
 }
 
@@ -570,7 +596,9 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
     std::wstring text = NormalizeNewlines(FromUtf8(bytes));
 
     Newsletter doc;
-    enum { None, Header, InArticle, InPicture, InBook } section = None;
+    enum { None, Header, InArticle, InPicture, InBook, InBackground } section = None;
+    Background* currentBackground = nullptr;
+    Background ignoredBackground;  // 잘못된 쪽 번호의 배경은 읽고 버림
     bool sawHeader = false;
     size_t start = 0;
     int lineNo = 0;
@@ -601,6 +629,12 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
             }
             section = InBook;
             doc.articles.back().books.emplace_back();
+            continue;
+        }
+        if (trimmed == L"[background]") {
+            if (!sawHeader) break;
+            section = InBackground;
+            currentBackground = nullptr;
             continue;
         }
         if (trimmed == L"[picture]") {
@@ -659,6 +693,37 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
                 error = std::to_wstring(lineNo) + L"번째 줄의 그림 데이터가 손상되었습니다.";
                 return false;
             }
+        } else if (section == InBackground) {
+            if (key == L"page") {
+                std::wstring v = Trim(value);
+                int page = ToInt(v, -1);
+                if (v == L"all") {
+                    doc.background = Background{};
+                    currentBackground = &doc.background;
+                } else if (page >= 0 && page < 1000) {
+                    currentBackground = &doc.pageBackgrounds[page];
+                } else {
+                    currentBackground = &ignoredBackground;
+                }
+                continue;
+            }
+            Background& bg = currentBackground ? *currentBackground : ignoredBackground;
+            if (key == L"fit") {
+                std::wstring v = Trim(value);
+                bg.fit = v == L"stretch"   ? BackgroundFit::Stretch
+                         : v == L"contain" ? BackgroundFit::Contain
+                         : v == L"tile"    ? BackgroundFit::Tile
+                                           : BackgroundFit::Cover;
+            } else if (key == L"opacity") {
+                bg.opacity = std::clamp(ToInt(value, 30), kMinOpacity, kMaxOpacity);
+            } else if (key == L"width") {
+                bg.width = std::max(0, ToInt(value, 0));
+            } else if (key == L"height") {
+                bg.height = std::max(0, ToInt(value, 0));
+            } else if (key == L"data" && !Base64Decode(ToUtf8(Trim(value)), bg.data)) {
+                error = std::to_wstring(lineNo) + L"번째 줄의 배경 그림 데이터가 손상되었습니다.";
+                return false;
+            }
         } else if (section == InBook) {
             Book& b = doc.articles.back().books.back();
             if (key == L"title") b.title = value;
@@ -701,6 +766,13 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
             else b.coverId = nextId++;
         }
     }
+    // 배경 그림에도 캐시 번호를 매기고, 크기 정보가 없는 그림은 버립니다(쪽별 항목은 '배경 없음'으로 남김).
+    auto fixBackground = [&nextId](Background& bg) {
+        if (bg.data.empty() || bg.width < 1 || bg.height < 1) bg.data.clear();
+        else bg.id = nextId++;
+    };
+    fixBackground(doc.background);
+    for (auto& entry : doc.pageBackgrounds) fixBackground(entry.second);
     // 내용이 없거나 크기가 잘못된 그림은 버립니다.
     doc.pictures.erase(std::remove_if(doc.pictures.begin(), doc.pictures.end(),
                                       [](const Picture& p) { return p.data.empty() || p.width < 1 || p.height < 1; }),

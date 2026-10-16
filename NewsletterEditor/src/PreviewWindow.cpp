@@ -162,6 +162,13 @@ bool PreviewWindow::HitTitle(POINT pt) const {
     return doc_ && !IsRectEmpty(&r) && PtInRect(&r, pt);
 }
 
+int PreviewWindow::CommandPage() const {
+    if (contextPage_ >= 0) return contextPage_;
+    RECT rc;
+    GetClientRect(hwnd_, &rc);
+    return PageAt(rc.bottom / 2);
+}
+
 void PreviewWindow::MoveTitle(int dx, int dy) {
     doc_->titleOffsetX = std::clamp(titleOrigX_ + dx, -nl::kMaxTitleOffset, nl::kMaxTitleOffset);
     doc_->titleOffsetY = std::clamp(titleOrigY_ + dy, -16, nl::kMaxTitleOffset);
@@ -647,6 +654,7 @@ void PreviewWindow::FinishPlacing(POINT pt) {
 void PreviewWindow::OnContextMenu(POINT screenPt) {
     if (!doc_ || placing_) return;
     POINT pt = screenPt;
+    int menuPage = -1;
     if (pt.x == -1 && pt.y == -1) {  // 키보드(메뉴 키)로 연 경우: 선택한 그림 위치에 띄움
         if (selected_ < 0 && !titleSelected_) return;
         RECT r = selected_ >= 0 ? PictureDeviceRect(doc_->pictures[selected_]) : TitleDeviceRect();
@@ -655,6 +663,7 @@ void PreviewWindow::OnContextMenu(POINT screenPt) {
         screenPt = pt;
     } else {
         ScreenToClient(hwnd_, &pt);
+        menuPage = PageAt(pt.y);
         int hit = HitPicture(pt);
         bool onTitle = hit < 0 && HitTitle(pt);
         if (hit != selected_ || onTitle != titleSelected_) {
@@ -688,10 +697,19 @@ void PreviewWindow::OnContextMenu(POINT screenPt) {
     } else {
         AppendMenuW(menu, MF_STRING, IDM_INSERT_PHOTO, L"사진 추가...");
         AppendMenuW(menu, MF_STRING, IDM_INSERT_LOGO, L"로고 넣기...");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        std::wstring pageItem = menuPage >= 0 ? std::to_wstring(menuPage + 1) + L"쪽 배경 그림..." : L"이 쪽 배경 그림...";
+        AppendMenuW(menu, MF_STRING, IDM_BACKGROUND_PAGE, pageItem.c_str());
+        AppendMenuW(menu, MF_STRING, IDM_BACKGROUND_ALL, L"모든 쪽 배경 그림...");
     }
-    // 명령은 부모(주 창)로 가서 메뉴와 같은 경로로 처리됩니다.
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON, screenPt.x, screenPt.y, 0, GetParent(hwnd_), nullptr);
+    // 고른 명령은 부모(주 창)로 보내 메뉴와 같은 경로로 처리합니다. 처리하는 동안 대상 쪽을 알려 줍니다.
+    int command = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, screenPt.x, screenPt.y, 0, hwnd_, nullptr);
     DestroyMenu(menu);
+    if (command) {
+        contextPage_ = menuPage;
+        SendMessageW(GetParent(hwnd_), WM_COMMAND, MAKEWPARAM(command, 0), 0);
+        contextPage_ = -1;
+    }
 }
 
 bool PreviewWindow::OnSetCursor() {

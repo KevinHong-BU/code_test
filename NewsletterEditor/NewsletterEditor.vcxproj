@@ -98,6 +98,7 @@
     <ClCompile Include="src\Renderer.cpp" />
     <ClCompile Include="src\ImageLibrary.cpp" />
     <ClCompile Include="src\BookDialog.cpp" />
+    <ClCompile Include="src\BackgroundDialog.cpp" />
     <ClCompile Include="src\Newsletter.cpp" />
     <ClCompile Include="src\HtmlExport.cpp" />
   </ItemGroup>
@@ -107,6 +108,7 @@
     <ClInclude Include="src\Renderer.h" />
     <ClInclude Include="src\ImageLibrary.h" />
     <ClInclude Include="src\BookDialog.h" />
+    <ClInclude Include="src\BackgroundDialog.h" />
     <ClInclude Include="src\Newsletter.h" />
     <ClInclude Include="src\HtmlExport.h" />
     <ClInclude Include="src\resource.h" />

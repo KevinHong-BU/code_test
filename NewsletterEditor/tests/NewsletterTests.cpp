@@ -48,6 +48,16 @@ bool Equal(const nl::Newsletter& a, const nl::Newsletter& b) {
                 return false;
         }
     }
+    auto sameBackground = [](const nl::Background& x, const nl::Background& y) {
+        return x.data == y.data && (x.data.empty() || (x.width == y.width && x.height == y.height &&
+                                                       x.fit == y.fit && x.opacity == y.opacity));
+    };
+    if (!sameBackground(a.background, b.background) || a.pageBackgrounds.size() != b.pageBackgrounds.size())
+        return false;
+    for (const auto& entry : a.pageBackgrounds) {
+        auto it = b.pageBackgrounds.find(entry.first);
+        if (it == b.pageBackgrounds.end() || !sameBackground(entry.second, it->second)) return false;
+    }
     if (a.pictures.size() != b.pictures.size()) return false;
     for (size_t i = 0; i < a.pictures.size(); ++i) {
         const auto& x = a.pictures[i];
@@ -301,6 +311,54 @@ void TestBooksAndPageBreaks() {
     CHECK(Contains(html, "font-size:28.9px;font-weight:normal;"));  // 21 * 44/32 = 28.875
 }
 
+void TestBackgrounds() {
+    nl::Newsletter doc = nl::CreateSample();
+    CHECK(doc.BackgroundFor(0) == nullptr);
+
+    nl::Background all;
+    all.data = FakePng();
+    all.width = 200;
+    all.height = 100;
+    all.fit = nl::BackgroundFit::Tile;
+    all.opacity = 50;
+    all.id = doc.NextPictureId();
+    doc.background = all;
+    CHECK(doc.NextPictureId() == all.id + 1);
+    CHECK(doc.BackgroundFor(0) == &doc.background && doc.BackgroundFor(7) == &doc.background);
+
+    nl::Background cover = all;
+    cover.fit = nl::BackgroundFit::Contain;
+    cover.opacity = 15;
+    cover.id = doc.NextPictureId();
+    doc.pageBackgrounds[0] = cover;           // 1쪽은 따로
+    doc.pageBackgrounds[2] = nl::Background{};  // 3쪽은 배경 없음
+    CHECK(doc.BackgroundFor(0) == &doc.pageBackgrounds[0]);
+    CHECK(doc.BackgroundFor(1) == &doc.background);
+    CHECK(doc.BackgroundFor(2) == nullptr);
+
+    std::string data = nl::Serialize(doc);
+    CHECK(Contains(data, "page=all") && Contains(data, "fit=tile") && Contains(data, "fit=contain"));
+    nl::Newsletter loaded;
+    std::wstring error;
+    CHECK(nl::Deserialize(data, loaded, error));
+    CHECK(Equal(doc, loaded));
+    CHECK(loaded.BackgroundFor(2) == nullptr && loaded.BackgroundFor(1) != nullptr);
+    CHECK(loaded.background.id != loaded.pageBackgrounds[0].id);
+
+    // 잘못된 값: 쪽 번호가 이상하면 버리고, 진하기는 범위 안으로
+    CHECK(nl::Deserialize("[newsletter]\nformat=2\n[background]\npage=-3\nwidth=10\nheight=10\ndata=Zm9v\n"
+                          "[background]\npage=all\nopacity=900\nwidth=10\nheight=10\ndata=Zm9v\n",
+                          loaded, error));
+    CHECK(loaded.pageBackgrounds.empty());
+    CHECK(loaded.background.opacity == nl::kMaxOpacity && !loaded.background.data.empty());
+
+    // HTML: 모든 쪽 배경만, 진하기는 흰 막으로
+    std::string html = nl::ExportHtml(doc);
+    CHECK(Contains(html, "rgba(255,255,255,0.50)"));
+    CHECK(Contains(html, "0 0/25% auto repeat"));
+    CHECK(!Contains(nl::ExportHtml(nl::CreateSample()), "linear-gradient"));
+}
+
 void TestHtmlPictures() {
     nl::Newsletter doc = nl::CreateBlank();
     doc.articles = {{L"공지사항", L"첫 기사", L"본문"}, {L"기타", L"둘째 기사", L"본문"}};
@@ -457,6 +515,7 @@ int main() {
     TestFonts();
     TestFontSizes();
     TestBooksAndPageBreaks();
+    TestBackgrounds();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

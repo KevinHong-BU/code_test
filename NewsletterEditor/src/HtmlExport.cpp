@@ -172,6 +172,20 @@ std::string ExportHtml(const Newsletter& doc) {
     h += L".masthead h1,.article h2,.tag{font-family:" + FontStack(doc.headingFont) + L"}\n";
     h += L".paper{max-width:760px;margin:24px auto;background:#fff;padding:40px 48px;"
          L"box-shadow:0 2px 10px rgba(0,0,0,.15)}\n";
+    // 모든 쪽 배경: 그 위에 흰색 반투명 막을 덮어 진하기를 나타냅니다(쪽별 배경은 HTML에서 쓰지 않음).
+    const std::string bgMime = ImageMimeType(doc.background.data);
+    if (!doc.background.data.empty() && !bgMime.empty()) {
+        int opacity = std::clamp(doc.background.opacity, kMinOpacity, kMaxOpacity);
+        wchar_t veil[16];
+        std::swprintf(veil, 16, L"%.2f", (100 - opacity) / 100.0);
+        const wchar_t* layout = doc.background.fit == BackgroundFit::Stretch   ? L"center/100% 100% no-repeat"
+                                : doc.background.fit == BackgroundFit::Contain ? L"center/contain no-repeat"
+                                : doc.background.fit == BackgroundFit::Tile    ? L"0 0/25% auto repeat"
+                                                                               : L"center/cover no-repeat";
+        h += L".paper{background:linear-gradient(rgba(255,255,255," + std::wstring(veil) + L"),rgba(255,255,255," +
+             veil + L")),url(data:" + FromUtf8(bgMime) + L";base64," + FromUtf8(Base64Encode(doc.background.data)) +
+             L") " + layout + L",#fff}\n";
+    }
     h += L".masthead{background:" + Css(theme.primary) + L";color:#fff;border-radius:8px;padding:22px 28px;"
          L"border-bottom:6px solid " + Css(theme.accent) + L"}\n";
     const wchar_t* titleAlign = doc.titleAlign == TitleAlign::Center  ? L"center"

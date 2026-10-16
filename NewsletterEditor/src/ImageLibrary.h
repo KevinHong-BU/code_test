@@ -37,7 +37,10 @@ public:
         Draw(hdc, picture.id, picture.data, rect, forPrint);
     }
 
-    // 문서에 더 이상 없는 그림·표지를 캐시에서 지웁니다.
+    // 쪽 배경을 rect(논리 좌표, 보통 쪽 전체)에 맞춤 방식과 진하기대로 그립니다.
+    void DrawBackground(HDC hdc, const nl::Background& background, const RECT& rect, bool forPrint);
+
+    // 문서에 더 이상 없는 그림·표지·배경을 캐시에서 지웁니다.
     void Prune(const nl::Newsletter& doc);
 
 private:

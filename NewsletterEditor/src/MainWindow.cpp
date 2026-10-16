@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "BackgroundDialog.h"
 #include "BookDialog.h"
 #include "HtmlExport.h"
 #include "Renderer.h"
@@ -238,10 +239,10 @@ void MainWindow::CreateControls() {
     titleSizeLabel_ = AddLabel(L"크기");
     titleSize_ = AddSizeCombo(IDC_TITLE_SIZE, {L"20", L"24", L"27", L"30", L"36", L"40", L"48"});
     titleReset_ = AddButton(IDM_TITLE_RESET, L"위치 처음대로");
-    publisherLabel_ = AddLabel(L"발행처");
-    publisher_ = AddEdit(IDC_PUBLISHER, true);
     greetingLabel_ = AddLabel(L"머리말");
     greeting_ = AddEdit(IDC_GREETING, true);
+    publisherLabel_ = AddLabel(L"발행처");
+    publisher_ = AddEdit(IDC_PUBLISHER, true);
 
     list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, 0, 0,
@@ -349,6 +350,7 @@ void MainWindow::CreateControls() {
     logoButton_ = AddButton(IDM_INSERT_LOGO, L"로고 넣기");
     photoButton_ = AddButton(IDM_INSERT_PHOTO, L"사진 추가");
     deletePictureButton_ = AddButton(IDM_PICTURE_DELETE, L"그림 삭제");
+    backgroundButton_ = AddButton(IDC_BACKGROUND_BUTTON, L"쪽 배경 ▼");
     pictureHint_ = AddLabel(L"그림은 끌어서 옮기고, 모서리·변의 손잡이로 크기를 바꿉니다. 오른쪽 단추: 그림 메뉴",
                             SS_ENDELLIPSIS);
 
@@ -400,6 +402,9 @@ void MainWindow::CreateMenuBar() {
     AppendMenuW(insert, MF_STRING, IDM_PICTURE_BACK, L"맨 뒤로 보내기(&B)");
     AppendMenuW(insert, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(insert, MF_STRING, IDM_PICTURE_DELETE, L"그림 삭제(&D)\tDel");
+    AppendMenuW(insert, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(insert, MF_STRING, IDM_BACKGROUND_PAGE, L"이 쪽 배경 그림(&G)...");
+    AppendMenuW(insert, MF_STRING, IDM_BACKGROUND_ALL, L"모든 쪽 배경 그림(&K)...");
 
     HMENU help = CreatePopupMenu();
     AppendMenuW(help, MF_STRING, IDM_ABOUT, L"정보(&A)...");
@@ -484,12 +489,13 @@ void MainWindow::LayoutControls() {
         place(titleReset_, x, y, ir - x, rowH);
     }
     y += rowStep;
-    place(publisherLabel_, il, y, labelW, rowH);
-    place(publisher_, il + labelW, y, ir - il - labelW, S(48));
-    y += S(48) + S(6);
     place(greetingLabel_, il, y, labelW, rowH);
     place(greeting_, il + labelW, y, ir - il - labelW, S(72));
-    y += S(72) + S(12);
+    y += S(72) + S(6);
+    // 발행처는 소식지 마지막 쪽 맨 아래에 실리므로 입력란도 머리말 아래에 둡니다.
+    place(publisherLabel_, il, y, labelW, rowH);
+    place(publisher_, il + labelW, y, ir - il - labelW, S(48));
+    y += S(48) + S(12);
     place(infoGroup_, pad, pad, panelW - pad, y - pad);
 
     // 기사 그룹
@@ -564,7 +570,7 @@ void MainWindow::LayoutControls() {
     const int previewLeft = panelW + pad;
     const int toolH = S(28);
     int bx = previewLeft;
-    for (HWND b : {logoButton_, photoButton_, deletePictureButton_}) {
+    for (HWND b : {logoButton_, photoButton_, deletePictureButton_, backgroundButton_}) {
         place(b, bx, pad, S(86), toolH);
         bx += S(86) + S(6);
     }
@@ -1472,6 +1478,34 @@ void MainWindow::ReplacePicture() {
     MarkDirty();
 }
 
+// 쪽 배경 그림: 모든 쪽 배경, 또는 (미리보기에서 보고 있는/오른쪽 단추로 고른) 쪽만의 배경
+void MainWindow::EditBackground(bool allPages) {
+    preview_.CancelInteraction();
+    const int page = allPages ? -1 : preview_.CommandPage();
+    auto it = doc_.pageBackgrounds.find(page);
+    bool separate = !allPages && it != doc_.pageBackgrounds.end();
+    nl::Background bg = allPages ? doc_.background : (separate ? it->second : doc_.background);
+    auto loader = [this](HWND owner, nl::Picture* p) { return LoadPictureFile(owner, L"배경 그림 고르기", p); };
+    if (!BackgroundDialog::Run(hwnd_, instance_, uiFont_, dpi_, &images_, loader, page, &separate, &bg)) return;
+    if (allPages) doc_.background = bg;
+    else if (separate) doc_.pageBackgrounds[page] = bg;
+    else doc_.pageBackgrounds.erase(page);
+    images_.Prune(doc_);
+    MarkDirty();
+    preview_.Refresh();
+}
+
+void MainWindow::ShowBackgroundMenu() {
+    RECT rc;
+    GetWindowRect(backgroundButton_, &rc);
+    HMENU menu = CreatePopupMenu();
+    std::wstring pageItem = std::to_wstring(preview_.CommandPage() + 1) + L"쪽(지금 보는 쪽) 배경 그림...";
+    AppendMenuW(menu, MF_STRING, IDM_BACKGROUND_PAGE, pageItem.c_str());
+    AppendMenuW(menu, MF_STRING, IDM_BACKGROUND_ALL, L"모든 쪽 배경 그림...");
+    TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, hwnd_, nullptr);
+    DestroyMenu(menu);
+}
+
 void MainWindow::UpdatePictureCommands() {
     int index = preview_.SelectedPicture();
     bool has = index >= 0 && index < static_cast<int>(doc_.pictures.size());
@@ -1602,6 +1636,9 @@ void MainWindow::OnCommand(int id, int code, HWND control) {
         case IDM_MOVE_UP: MoveArticle(-1); break;
         case IDM_MOVE_DOWN: MoveArticle(+1); break;
         case IDM_INSERT_LOGO: InsertLogo(); break;
+        case IDC_BACKGROUND_BUTTON: ShowBackgroundMenu(); break;
+        case IDM_BACKGROUND_PAGE: EditBackground(false); break;
+        case IDM_BACKGROUND_ALL: EditBackground(true); break;
         case IDM_INSERT_PHOTO: InsertPhoto(); break;
         case IDM_PICTURE_REPLACE: ReplacePicture(); break;
         case IDM_PICTURE_ASPECT: preview_.ResetAspectRatio(); break;

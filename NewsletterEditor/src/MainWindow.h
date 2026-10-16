@@ -86,6 +86,8 @@ private:
     void InsertPhoto();
     void ReplacePicture();
     void UpdatePictureCommands();
+    void EditBackground(bool allPages);
+    void ShowBackgroundMenu();
 
     // 파일
     bool ConfirmDiscard();
@@ -132,6 +134,7 @@ private:
     HWND articleTitleLabel_ = nullptr, articleTitle_ = nullptr;
     HWND bodyLabel_ = nullptr, body_ = nullptr, bodyHint_ = nullptr;
     HWND logoButton_ = nullptr, photoButton_ = nullptr, deletePictureButton_ = nullptr, pictureHint_ = nullptr;
+    HWND backgroundButton_ = nullptr;
     HWND headingFontLabel_ = nullptr, headingFont_ = nullptr, bodyFontLabel_ = nullptr, bodyFont_ = nullptr;
     HWND headingSizeLabel_ = nullptr, headingSize_ = nullptr, bodySizeLabel_ = nullptr, bodySize_ = nullptr;
     HWND titleLayoutLabel_ = nullptr, titleAlign_ = nullptr, titleSizeLabel_ = nullptr, titleSize_ = nullptr;

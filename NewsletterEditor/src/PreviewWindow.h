@@ -41,6 +41,9 @@ public:
     bool IsTitleSelected() const { return titleSelected_; }
     void SelectPicture(int index);  // 그 그림이 보이도록 스크롤
 
+    // 쪽 단위 명령(쪽 배경 등)의 대상 쪽: 오른쪽 단추 메뉴에서 고른 경우 그 쪽, 아니면 화면 가운데에 보이는 쪽.
+    int CommandPage() const;
+
     // 선택한 그림 편집
     void DeleteSelected();
     void ResetAspectRatio();
@@ -96,6 +99,7 @@ private:
     int scrollY_ = 0;
 
     int selected_ = -1;
+    int contextPage_ = -1;  // 오른쪽 단추 메뉴를 연 쪽(메뉴 명령을 처리하는 동안만)
     bool titleSelected_ = false;  // 맨 위 제호 묶음이 선택됨
     int titleOrigX_ = 0, titleOrigY_ = 0;
     double titleStartX_ = 0, titleStartY_ = 0;

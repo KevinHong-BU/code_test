@@ -306,13 +306,15 @@ void Renderer::Layout(const Newsletter& doc) {
         FlowText(FEmpty, kMutedColor, L"아직 기사가 없습니다. [기사 추가] 버튼으로 첫 기사를 써 보세요.", kMarginLeft,
                  kMarginRight, LineHeight(FEmpty, 1.5), DT_CENTER);
     }
+
+    // 글이 끝난 뒤의 쪽에 놓인 그림도 사라지지 않도록 그 쪽까지 만들어 둡니다.
+    while (PageCount() <= lastPicturePage) pages_.emplace_back();
+
+    // 발행처는 언제나 마지막 쪽 맨 아래에 둡니다.
     if (!Trim(doc.publisher).empty()) AddPublisher(doc);
 
     DeleteDC(measure_);
     measure_ = nullptr;
-
-    // 글이 끝난 뒤의 쪽에 놓인 그림도 사라지지 않도록 그 쪽까지 만들어 둡니다.
-    while (PageCount() <= lastPicturePage) pages_.emplace_back();
 }
 
 void Renderer::AddMasthead(const Newsletter& doc) {
@@ -608,15 +610,42 @@ void Renderer::AddBooks(const Newsletter& doc, size_t articleIndex) {
     y_ -= gap;
 }
 
+// 발행처 묶음(구분선 + 가운데 맞춘 글)을 마지막 쪽의 바닥글 바로 위에 붙여 놓습니다.
+// 마지막 쪽에 남은 자리가 모자라면 새 쪽을 만들어 그 쪽 맨 아래에 둡니다.
 void Renderer::AddPublisher(const Newsletter& doc) {
     const int lh = LineHeight(FMeta, 1.5);
-    if (!AtTop()) y_ += 44;
-    if (y_ + 12 + lh > kContentBottom && !AtTop()) NewPage();
-    Span rule = FreeSpan(y_, y_ + 1, kMarginLeft, kMarginRight, 40);
-    if (!rule.empty()) Add({Item::Fill, RECT{rule.left, y_, rule.right, y_ + 1}, kRuleColor, 0, L"", 0});
-    y_ += 12;
-    for (const auto& para : SplitParagraphs(doc.publisher))
-        FlowText(FMeta, kMutedColor, para, kMarginLeft, kMarginRight, lh, DT_CENTER);
+    std::vector<std::wstring> lines;
+    for (const auto& para : SplitParagraphs(doc.publisher)) {
+        size_t pos = 0;
+        do {
+            while (pos < para.size() && para[pos] == L' ') ++pos;
+            size_t next = para.size();
+            lines.push_back(pos < para.size() ? TakeLine(FMeta, para, pos, kContentWidth, &next) : L"");
+            pos = next;
+        } while (pos < para.size());
+    }
+    const int blockHeight = 12 + static_cast<int>(lines.size()) * lh;
+
+    // 그림만 있는 뒤쪽 쪽이 있으면 그 쪽이 마지막 쪽입니다.
+    if (page_ < PageCount() - 1) {
+        page_ = PageCount() - 1;
+        y_ = kContentTop;
+    }
+    const int gapAbove = AtTop() ? 0 : 32;  // 본문 끝과 최소한 이만큼 띄움
+    int top = kContentBottom - blockHeight;
+    if (top < y_ + gapAbove) {
+        NewPage();
+        top = kContentBottom - blockHeight;
+    }
+    top = std::max(top, kContentTop);
+
+    Add({Item::Fill, RECT{kMarginLeft, top, kMarginRight, top + 1}, kRuleColor, 0, L"", 0});
+    int y = top + 12;
+    for (const auto& line : lines) {
+        Add({Item::Text, RECT{kMarginLeft, y, kMarginRight, y + lh}, kMutedColor, FMeta, line, DT_CENTER});
+        y += lh;
+    }
+    y_ = kContentBottom;
 }
 
 int Renderer::AnchorFor(int page, int y) const {
@@ -639,6 +668,11 @@ void Renderer::DrawPage(HDC hdc, int page, const Newsletter& doc, ImageLibrary* 
     RECT pageRect{0, 0, kPageWidth, kPageHeight};
     FillRect(hdc, &pageRect, white);
     DeleteObject(white);
+
+    // 쪽 배경 그림(이 쪽 전용이 있으면 그것, 없으면 모든 쪽 배경)
+    if (images) {
+        if (const Background* bg = doc.BackgroundFor(page)) images->DrawBackground(hdc, *bg, pageRect, forPrint);
+    }
 
     auto draw = [&](const Item& item) {
         RECT rc = item.rc;
