@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disk Usage Tree</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385;
+    --border: #e2e5eb; --accent: #2f6fde; --bar: #cfe0ff; --bar-strong: #2f6fde;
+    --hover: #eef3fd; --danger: #c43d3d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181e; --panel: #1d2129; --text: #e4e7ee; --muted: #9098a9;
+      --border: #2d323d; --accent: #6b9cff; --bar: #263a5e; --bar-strong: #6b9cff;
+      --hover: #232a38; --danger: #ff7b7b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 "Segoe UI", "Malgun Gothic", system-ui, sans-serif; }
+  header { padding: 16px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
+           display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  h1 { font-size: 18px; margin: 0 16px 0 0; }
+  select, input, button { font: inherit; color: inherit; background: var(--panel);
+           border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+  input#path { min-width: 240px; flex: 1; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { padding: 10px 20px; color: var(--muted); font-size: 13px; min-height: 40px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #status .err { color: var(--danger); }
+  main { padding: 0 20px 40px; }
+  .tree { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .head, .row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 170px 90px 90px;
+                gap: 8px; align-items: center; padding: 4px 12px; }
+  .head { font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border);
+          background: var(--bg); position: sticky; top: 0; }
+  .row:hover { background: var(--hover); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .name { display: flex; align-items: center; min-width: 0; }
+  .name .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toggle { width: 20px; flex: none; text-align: center; cursor: pointer; color: var(--muted);
+            user-select: none; transition: transform .1s; }
+  .toggle.open { transform: rotate(90deg); }
+  .toggle.leaf { visibility: hidden; }
+  .icon { margin-right: 6px; flex: none; }
+  .files-row .label, .more-row .label { color: var(--muted); font-style: italic; }
+  .bar { height: 12px; background: var(--border); border-radius: 3px; position: relative; overflow: hidden; }
+  .bar > span { position: absolute; inset: 0 auto 0 0; background: var(--bar-strong); }
+  .pct { font-size: 12px; color: var(--muted); }
+  .err-badge { color: var(--danger); font-size: 11px; margin-left: 6px; }
+  .open-btn { margin-left: 8px; font-size: 11px; padding: 0 6px; opacity: 0; }
+  .row:hover .open-btn { opacity: 1; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  @media (max-width: 720px) {
+    .head, .row { grid-template-columns: minmax(0, 1fr) 80px 70px; }
+    .col-files, .col-dirs { display: none; }
+    .bar { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>📁 Disk Usage Tree</h1>
+  <select id="roots" title="드라이브"></select>
+  <input id="path" placeholder="스캔할 경로 (예: C:\)">
+  <button id="scan" class="primary">스캔 시작</button>
+  <button id="cancel" disabled>취소</button>
+</header>
+<div id="status">드라이브를 선택하고 [스캔 시작]을 누르세요. 관리자 권한으로 실행하면 더 많은 폴더를 읽을 수 있습니다.</div>
+<main>
+  <div class="tree">
+    <div class="head">
+      <div>이름</div><div class="num">크기</div><div>상위 대비 비율</div>
+      <div class="num col-files">파일 수</div><div class="num col-dirs">폴더 수</div>
+    </div>
+    <div id="tree"><div class="empty">아직 스캔 결과가 없습니다.</div></div>
+  </div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const IS_WIN = navigator.userAgent.includes("Windows");
+
+function fmtSize(b) {
+  if (b == null) return "-";
+  const u = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (i === 0 ? b : b.toFixed(b < 10 ? 2 : 1)) + " " + u[i];
+}
+const fmtNum = (n) => n.toLocaleString("ko-KR");
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function api(url, body) {
+  const opt = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
+  const r = await fetch(url, opt);
+  return r.json();
+}
+
+// ---- 드라이브 목록 ----
+async function loadRoots() {
+  const { roots, default: def } = await api("/api/roots");
+  $("#roots").innerHTML = roots.map((r) => {
+    const info = r.total ? ` (${fmtSize(r.used)} / ${fmtSize(r.total)})` : "";
+    return `<option value="${esc(r.path)}">${esc(r.path)}${info}</option>`;
+  }).join("");
+  $("#path").value = def;
+}
+$("#roots").addEventListener("change", (e) => { $("#path").value = e.target.value; });
+
+// ---- 스캔 ----
+let pollTimer = null;
+$("#scan").addEventListener("click", async () => {
+  const res = await api("/api/scan", { path: $("#path").value.trim() });
+  if (!res.ok) { setStatus(`<span class="err">${esc(res.error)}</span>`); return; }
+  $("#tree").innerHTML = '<div class="empty">스캔 중...</div>';
+  poll();
+});
+$("#cancel").addEventListener("click", () => api("/api/cancel", {}));
+
+function setStatus(html) { $("#status").innerHTML = html; }
+
+async function poll() {
+  clearTimeout(pollTimer);
+  const s = await api("/api/status");
+  $("#scan").disabled = s.running;
+  $("#cancel").disabled = !s.running;
+  if (s.running) {
+    setStatus(`⏳ 스캔 중 ${s.elapsed}s · 폴더 ${fmtNum(s.scannedDirs)} · 파일 ${fmtNum(s.scannedFiles)} · ${fmtSize(s.scannedBytes)} · ${esc(s.currentPath)}`);
+    pollTimer = setTimeout(poll, 500);
+    return;
+  }
+  if (s.error) {
+    setStatus(`<span class="err">⚠ ${esc(s.error)}</span>`);
+    if (!s.ready) $("#tree").innerHTML = '<div class="empty">스캔 결과가 없습니다.</div>';
+    return;
+  }
+  if (s.ready) {
+    setStatus(`✅ 완료 (${s.elapsed}s) · ${esc(s.rootPath)} · 폴더 ${fmtNum(s.scannedDirs)} · 파일 ${fmtNum(s.scannedFiles)} · 총 ${fmtSize(s.scannedBytes)}`);
+    renderRoot();
+  }
+}
+
+// ---- 트리 렌더링 ----
+function rowHtml(item, depth, kind) {
+  const pad = depth * 18;
+  const toggle = kind === "dir"
+    ? `<span class="toggle ${item.hasChildren ? "" : "leaf"}">▶</span>` : `<span class="toggle leaf">▶</span>`;
+  const icon = kind === "dir" ? "📁" : kind === "files" ? "📄" : "…";
+  const errs = item.errors ? `<span class="err-badge" title="접근할 수 없는 항목">⚠ ${fmtNum(item.errors)}</span>` : "";
+  const openBtn = kind === "dir" && IS_WIN ? `<button class="open-btn" title="탐색기에서 열기">열기</button>` : "";
+  const pct = Math.max(0, Math.min(100, item.percent || 0));
+  return `
+    <div class="name" style="padding-left:${pad}px">${toggle}<span class="icon">${icon}</span>
+      <span class="label" title="${esc(item.path || item.name)}">${esc(item.name)}</span>${errs}${openBtn}</div>
+    <div class="num">${fmtSize(item.size)}</div>
+    <div style="display:flex;gap:6px;align-items:center"><div class="bar" style="flex:1"><span style="width:${pct}%"></span></div>
+      <span class="pct num" style="width:44px">${pct.toFixed(1)}%</span></div>
+    <div class="num col-files">${item.files != null ? fmtNum(item.files) : ""}</div>
+    <div class="num col-dirs">${item.dirs != null ? fmtNum(item.dirs) : ""}</div>`;
+}
+
+function makeRow(item, depth, kind) {
+  const wrap = document.createElement("div");
+  const row = document.createElement("div");
+  row.className = "row " + (kind === "dir" ? "" : kind + "-row");
+  row.innerHTML = rowHtml(item, depth, kind);
+  wrap.appendChild(row);
+  if (kind !== "dir") return wrap;
+
+  const kids = document.createElement("div");
+  kids.hidden = true;
+  wrap.appendChild(kids);
+  const toggle = row.querySelector(".toggle");
+  let loaded = false;
+  const flip = async () => {
+    if (!item.hasChildren) return;
+    if (!loaded) { await loadChildren(item.path, kids, depth + 1); loaded = true; }
+    kids.hidden = !kids.hidden;
+    toggle.classList.toggle("open", !kids.hidden);
+  };
+  toggle.addEventListener("click", flip);
+  row.querySelector(".label").addEventListener("dblclick", flip);
+  const ob = row.querySelector(".open-btn");
+  if (ob) ob.addEventListener("click", () => api("/api/open", { path: item.path }));
+  wrap.expand = flip;
+  return wrap;
+}
+
+async function loadChildren(path, container, depth, limit = 200) {
+  const data = await api(`/api/children?limit=${limit}` + (path != null ? `&path=${encodeURIComponent(path)}` : ""));
+  container.innerHTML = "";
+  if (data.error) { container.innerHTML = `<div class="empty">${esc(data.error)}</div>`; return data; }
+  const parentSize = data.node.size;
+  for (const c of data.children) container.appendChild(makeRow(c, depth, "dir"));
+  if (data.hiddenCount) {
+    const more = makeRow({ name: `그 외 폴더 ${fmtNum(data.hiddenCount)}개 (클릭하여 모두 보기)`,
+      size: data.hiddenSize, percent: parentSize ? data.hiddenSize / parentSize * 100 : 0 }, depth, "more");
+    more.style.cursor = "pointer";
+    more.addEventListener("click", () => loadChildren(path, container, depth, 100000));
+    container.appendChild(more);
+  }
+  if (data.filesHere.count) {
+    container.appendChild(makeRow({ name: `(이 폴더의 파일 ${fmtNum(data.filesHere.count)}개)`,
+      size: data.filesHere.size, percent: parentSize ? data.filesHere.size / parentSize * 100 : 0 }, depth, "files"));
+  }
+  return data;
+}
+
+async function renderRoot() {
+  const tree = $("#tree");
+  const data = await api("/api/children?limit=1");
+  if (data.error) { tree.innerHTML = `<div class="empty">${esc(data.error)}</div>`; return; }
+  tree.innerHTML = "";
+  const root = makeRow({ ...data.node, name: data.node.path, percent: 100 }, 0, "dir");
+  tree.appendChild(root);
+  root.expand();
+}
+
+loadRoots().then(poll);
+</script>
+</body>
+</html>

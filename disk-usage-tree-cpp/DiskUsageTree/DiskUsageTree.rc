@@ -1,0 +1,4 @@
+#include "src/resource.h"
+
+// Web UI embedded into the executable
+IDR_INDEX_HTML RCDATA "web\\index.html"
