@@ -46,7 +46,7 @@ private:
     enum FontId { FLibrary, FTitle, FMeta, FGreeting, FTag, FHeading, FBody, FFooter, FEmpty, FontCount };
 
     struct Item {
-        enum Type { Fill, RoundFill, Text } type;
+        enum Type { Fill, RoundFill, Dot, Text } type;
         RECT rc;  // 쪽 좌표
         COLORREF color;
         int font;
@@ -61,7 +61,7 @@ private:
         int page, y;
     };
 
-    void CreateFonts();
+    void EnsureFonts(const std::wstring& heading, const std::wstring& body);
     int LineHeight(int font, double spacing) const;
     int TextWidth(int font, const std::wstring& s) const;
     // text[pos..]에서 width 안에 들어가는 한 줄을 잘라 냅니다. 다음 줄 시작 위치를 next에 돌려줍니다.
@@ -75,8 +75,9 @@ private:
     bool AtTop() const { return y_ == kContentTop; }
     void Add(const Item& item) { pages_[page_].push_back(item); }
     // 문단 하나를 그림을 피해 줄 단위로 흘려 넣습니다. indent/bullet은 글머리표 항목용.
+    // 글머리표는 글꼴에 '•' 글자가 없어도 보이도록 동그라미 도형으로 그립니다.
     void FlowText(int font, COLORREF color, const std::wstring& text, int left, int right, int lineHeight,
-                  UINT align = DT_LEFT, int indent = 0, const wchar_t* bullet = nullptr, COLORREF bulletColor = 0);
+                  UINT align = DT_LEFT, int indent = 0, bool bullet = false, COLORREF bulletColor = 0);
     // (startPage, startY)부터 현재 위치까지 쪽마다 배경 상자를 깔아 줍니다.
     void InsertBackground(int startPage, size_t startIndex, int startY, int left, int right, COLORREF color,
                           bool round = false);
@@ -87,6 +88,7 @@ private:
     void AddPublisher(const Newsletter& doc);
 
     HFONT fonts_[FontCount];
+    std::wstring headingFace_, bodyFace_;
     HDC measure_ = nullptr;  // Layout 동안만 유효
 
     std::vector<std::vector<Item>> pages_;

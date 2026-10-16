@@ -26,6 +26,7 @@ bool Contains(const std::string& haystack, const std::string& needle) {
 bool Equal(const nl::Newsletter& a, const nl::Newsletter& b) {
     if (a.libraryName != b.libraryName || a.title != b.title || a.issue != b.issue || a.date != b.date ||
         a.publisher != b.publisher || a.greeting != b.greeting || a.theme != b.theme ||
+        a.headingFont != b.headingFont || a.bodyFont != b.bodyFont ||
         a.articles.size() != b.articles.size())
         return false;
     for (size_t i = 0; i < a.articles.size(); ++i) {
@@ -157,6 +158,29 @@ void TestPictures() {
     // 그림 기능 이전(format=1) 파일도 그대로 열립니다.
     CHECK(nl::Deserialize("[newsletter]\nformat=1\ntitle=T\n[article]\ntitle=A\n", loaded, error));
     CHECK(loaded.articles.size() == 1 && loaded.pictures.empty());
+}
+
+void TestFonts() {
+    CHECK(nl::FontOrDefault(L"") == nl::kDefaultFont);
+    CHECK(nl::FontOrDefault(L"  ") == nl::kDefaultFont);
+    CHECK(nl::FontOrDefault(L" 나눔명조 ") == L"나눔명조");
+
+    // 기본 글꼴이면 파일에 적지 않고, 고른 글꼴은 그대로 다시 읽힙니다.
+    nl::Newsletter doc = nl::CreateSample();
+    CHECK(!Contains(nl::Serialize(doc), "Font="));
+    doc.headingFont = L"나눔명조";
+    doc.bodyFont = L"Noto Sans KR";
+    nl::Newsletter loaded;
+    std::wstring error;
+    CHECK(nl::Deserialize(nl::Serialize(doc), loaded, error));
+    CHECK(loaded.headingFont == L"나눔명조" && loaded.bodyFont == L"Noto Sans KR");
+
+    // HTML: 고른 글꼴 뒤에 대체 글꼴이 붙고, CSS를 깨뜨릴 수 있는 글자는 빠집니다.
+    doc.headingFont = L"Evil'}</style><script>";
+    std::string html = nl::ExportHtml(doc);
+    CHECK(Contains(html, nl::ToUtf8(L"font-family:'Noto Sans KR','Malgun Gothic','맑은 고딕'")));
+    CHECK(Contains(html, "font-family:'Evil/stylescript','Malgun Gothic'"));
+    CHECK(!Contains(html, "<script>"));
 }
 
 void TestHtmlPictures() {
@@ -312,6 +336,7 @@ int main() {
     TestJpegOrientation();
     TestPictures();
     TestHtmlPictures();
+    TestFonts();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

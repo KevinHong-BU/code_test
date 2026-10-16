@@ -108,6 +108,13 @@ bool StartsWith(const std::wstring& s, const wchar_t* prefix) {
 
 }  // namespace
 
+const wchar_t kDefaultFont[] = L"맑은 고딕";
+
+std::wstring FontOrDefault(const std::wstring& face) {
+    std::wstring trimmed = Trim(face);
+    return trimmed.empty() ? kDefaultFont : trimmed;
+}
+
 int Newsletter::NextPictureId() const {
     int id = 0;
     for (const Picture& p : pictures) id = std::max(id, p.id);
@@ -433,6 +440,8 @@ std::string Serialize(const Newsletter& doc) {
     put(L"publisher", doc.publisher);
     put(L"greeting", doc.greeting);
     put(L"theme", std::to_wstring(doc.theme));
+    if (!Trim(doc.headingFont).empty()) put(L"headingFont", Trim(doc.headingFont));
+    if (!Trim(doc.bodyFont).empty()) put(L"bodyFont", Trim(doc.bodyFont));
     for (const Article& a : doc.articles) {
         w += L"\n[article]\n";
         put(L"category", a.category);
@@ -513,6 +522,8 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
             else if (key == L"date") doc.date = value;
             else if (key == L"publisher") doc.publisher = value;
             else if (key == L"greeting") doc.greeting = value;
+            else if (key == L"headingFont") doc.headingFont = Trim(value);
+            else if (key == L"bodyFont") doc.bodyFont = Trim(value);
             else if (key == L"theme") {
                 doc.theme = ToInt(value, 0);
                 if (doc.theme < 0 || doc.theme >= ThemeCount()) doc.theme = 0;

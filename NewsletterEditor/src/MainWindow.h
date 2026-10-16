@@ -3,7 +3,9 @@
 
 #include <windows.h>
 
+#include <map>
 #include <string>
+#include <vector>
 
 #include "ImageLibrary.h"
 #include "Newsletter.h"
@@ -34,6 +36,13 @@ private:
     HWND AddEdit(int id, bool multiline);
     HWND AddButton(int id, const wchar_t* text);
     int S(int value) const { return MulDiv(value, dpi_, 96); }
+
+    // 글꼴 고르기
+    void LoadSystemFonts();
+    HWND AddFontCombo(int id);
+    void SelectFontInCombo(HWND combo, const std::wstring& face);
+    void DrawFontItem(const DRAWITEMSTRUCT* item);
+    HFONT PreviewFont(const std::wstring& face);
 
     // 문서 <-> 화면 동기화
     void LoadDocumentToUi();
@@ -101,5 +110,15 @@ private:
     HWND articleTitleLabel_ = nullptr, articleTitle_ = nullptr;
     HWND bodyLabel_ = nullptr, body_ = nullptr, bodyHint_ = nullptr;
     HWND logoButton_ = nullptr, photoButton_ = nullptr, deletePictureButton_ = nullptr, pictureHint_ = nullptr;
+    HWND headingFontLabel_ = nullptr, headingFont_ = nullptr, bodyFontLabel_ = nullptr, bodyFont_ = nullptr;
     HWND status_ = nullptr;
+
+    struct FontInfo {
+        std::wstring name;
+        bool hangul = false;  // 한글을 지원하는 글꼴
+        bool symbol = true;   // 기호 글꼴(Wingdings 등): 이름을 그 글꼴로 그리면 읽을 수 없음
+    };
+    std::vector<FontInfo> systemFonts_;
+    std::map<std::wstring, HFONT> previewFonts_;  // 글꼴 목록에서 이름을 그 글꼴로 보여 줄 때 쓰는 캐시
+    std::map<std::wstring, bool> canDrawOwnName_;  // 글꼴이 자기 이름의 글자를 모두 가지고 있는지
 };

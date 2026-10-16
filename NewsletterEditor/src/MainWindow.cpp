@@ -101,6 +101,7 @@ std::wstring ListItemText(const nl::Article& a) {
 MainWindow::MainWindow(HINSTANCE instance) : instance_(instance) {}
 
 MainWindow::~MainWindow() {
+    for (auto& entry : previewFonts_) DeleteObject(entry.second);
     if (uiFont_) DeleteObject(uiFont_);
     if (accel_) DestroyAcceleratorTable(accel_);
 }
@@ -211,6 +212,11 @@ void MainWindow::CreateControls() {
     SendMessageW(theme_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
     for (int i = 0; i < nl::ThemeCount(); ++i)
         SendMessageW(theme_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(nl::GetTheme(i).name));
+    LoadSystemFonts();
+    headingFontLabel_ = AddLabel(L"제목 글꼴");
+    headingFont_ = AddFontCombo(IDC_HEADING_FONT);
+    bodyFontLabel_ = AddLabel(L"본문 글꼴");
+    bodyFont_ = AddFontCombo(IDC_BODY_FONT);
     publisherLabel_ = AddLabel(L"발행처");
     publisher_ = AddEdit(IDC_PUBLISHER, true);
     greetingLabel_ = AddLabel(L"머리말");
@@ -360,6 +366,15 @@ void MainWindow::LayoutControls() {
     place(themeLabel_, col2, y, S(44), rowH);
     place(theme_, col2 + S(44), y, ir - col2 - S(44), S(260));
     y += rowStep;
+    {
+        const int fontW = (ir - il - colGap) / 2;
+        const int fontCol2 = il + fontW + colGap;
+        place(headingFontLabel_, il, y, labelW, rowH);
+        place(headingFont_, il + labelW, y, fontW - labelW, S(360));
+        place(bodyFontLabel_, fontCol2, y, labelW, rowH);
+        place(bodyFont_, fontCol2 + labelW, y, ir - fontCol2 - labelW, S(360));
+    }
+    y += rowStep;
     place(publisherLabel_, il, y, labelW, rowH);
     place(publisher_, il + labelW, y, ir - il - labelW, S(48));
     y += S(48) + S(6);
@@ -417,6 +432,8 @@ void MainWindow::LoadDocumentToUi() {
     SetWindowTextW(publisher_, nl::ToCrLf(doc_.publisher).c_str());
     SetWindowTextW(greeting_, nl::ToCrLf(doc_.greeting).c_str());
     SendMessageW(theme_, CB_SETCURSEL, doc_.theme, 0);
+    SelectFontInCombo(headingFont_, nl::FontOrDefault(doc_.headingFont));
+    SelectFontInCombo(bodyFont_, nl::FontOrDefault(doc_.bodyFont));
 
     SendMessageW(list_, LB_RESETCONTENT, 0, 0);
     for (const auto& a : doc_.articles)
@@ -489,6 +506,18 @@ void MainWindow::OnInfoChanged(int id) {
         case IDC_THEME: {
             int sel = static_cast<int>(SendMessageW(theme_, CB_GETCURSEL, 0, 0));
             doc_.theme = sel < 0 ? 0 : sel;
+            break;
+        }
+        case IDC_HEADING_FONT:
+        case IDC_BODY_FONT: {
+            HWND combo = id == IDC_HEADING_FONT ? headingFont_ : bodyFont_;
+            int sel = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+            if (sel < 0) return;
+            int len = static_cast<int>(SendMessageW(combo, CB_GETLBTEXTLEN, sel, 0));
+            std::wstring face(static_cast<size_t>(len) + 1, L'\0');
+            SendMessageW(combo, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(&face[0]));
+            face.resize(static_cast<size_t>(len));
+            (id == IDC_HEADING_FONT ? doc_.headingFont : doc_.bodyFont) = face;
             break;
         }
         default: return;
@@ -764,6 +793,129 @@ void MainWindow::Print() {
 }
 
 // ---------------------------------------------------------------------------
+// 글꼴 고르기
+
+namespace {
+
+struct FontEnumState {
+    std::map<std::wstring, std::pair<bool, bool>> fonts;  // 이름 -> (한글 지원, 기호 아닌 문자 집합 있음)
+};
+
+int CALLBACK EnumFontProc(const LOGFONTW* lf, const TEXTMETRICW*, DWORD, LPARAM param) {
+    auto* state = reinterpret_cast<FontEnumState*>(param);
+    if (lf->lfFaceName[0] == L'@' || lf->lfFaceName[0] == L'\0') return 1;  // 세로쓰기용 글꼴은 뺌
+    auto& flags = state->fonts[lf->lfFaceName];
+    if (lf->lfCharSet == HANGUL_CHARSET || lf->lfCharSet == JOHAB_CHARSET) flags.first = true;
+    if (lf->lfCharSet != SYMBOL_CHARSET) flags.second = true;
+    return 1;
+}
+
+}  // namespace
+
+// 설치된 글꼴 목록을 읽습니다. 한글 글꼴을 먼저, 그다음 나머지를 이름순으로 둡니다.
+void MainWindow::LoadSystemFonts() {
+    FontEnumState state;
+    LOGFONTW lf{};
+    lf.lfCharSet = DEFAULT_CHARSET;
+    HDC dc = GetDC(nullptr);
+    EnumFontFamiliesExW(dc, &lf, EnumFontProc, reinterpret_cast<LPARAM>(&state), 0);
+    ReleaseDC(nullptr, dc);
+
+    systemFonts_.clear();
+    for (const auto& entry : state.fonts) {
+        FontInfo info;
+        info.name = entry.first;
+        info.hangul = entry.second.first;
+        info.symbol = !entry.second.second;
+        systemFonts_.push_back(info);
+    }
+    std::stable_sort(systemFonts_.begin(), systemFonts_.end(),
+                     [](const FontInfo& a, const FontInfo& b) { return a.hangul && !b.hangul; });
+}
+
+HWND MainWindow::AddFontCombo(int id) {
+    HWND combo = CreateWindowExW(0, L"COMBOBOX", L"",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST |
+                                     CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
+                                 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_,
+                                 nullptr);
+    SendMessageW(combo, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (size_t i = 0; i < systemFonts_.size(); ++i) {
+        int index = static_cast<int>(
+            SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(systemFonts_[i].name.c_str())));
+        SendMessageW(combo, CB_SETITEMDATA, index, static_cast<LPARAM>(i));
+    }
+    SendMessageW(combo, CB_SETDROPPEDWIDTH, S(260), 0);
+    return combo;
+}
+
+// 문서의 글꼴을 목록에서 고릅니다. 이 컴퓨터에 없는 글꼴이면(다른 PC에서 만든 파일) 목록 끝에 덧붙입니다.
+void MainWindow::SelectFontInCombo(HWND combo, const std::wstring& face) {
+    int index = static_cast<int>(SendMessageW(combo, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+                                              reinterpret_cast<LPARAM>(face.c_str())));
+    if (index == CB_ERR) {
+        index = static_cast<int>(SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(face.c_str())));
+        SendMessageW(combo, CB_SETITEMDATA, index, static_cast<LPARAM>(-1));
+    }
+    SendMessageW(combo, CB_SETCURSEL, index, 0);
+}
+
+HFONT MainWindow::PreviewFont(const std::wstring& face) {
+    auto it = previewFonts_.find(face);
+    if (it != previewFonts_.end()) return it->second;
+    HFONT font = CreateFontW(-MulDiv(10, dpi_, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                             face.substr(0, LF_FACESIZE - 1).c_str());
+    previewFonts_[face] = font;
+    return font;
+}
+
+// 글꼴 목록의 각 항목을 그 글꼴 모양으로 그려, 고르기 전에 생김새를 볼 수 있게 합니다.
+void MainWindow::DrawFontItem(const DRAWITEMSTRUCT* item) {
+    HDC dc = item->hDC;
+    RECT rc = item->rcItem;
+    bool selected = (item->itemState & ODS_SELECTED) != 0;
+    FillRect(dc, &rc, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+    if (item->itemID == static_cast<UINT>(-1)) return;
+
+    int len = static_cast<int>(SendMessageW(item->hwndItem, CB_GETLBTEXTLEN, item->itemID, 0));
+    if (len <= 0) return;
+    std::wstring face(static_cast<size_t>(len) + 1, L'\0');
+    SendMessageW(item->hwndItem, CB_GETLBTEXT, item->itemID, reinterpret_cast<LPARAM>(&face[0]));
+    face.resize(static_cast<size_t>(len));
+    LPARAM data = static_cast<LPARAM>(item->itemData);
+    bool installed = data >= 0 && data < static_cast<LPARAM>(systemFonts_.size());
+
+    std::wstring text = face;
+    HFONT font = uiFont_;
+    if (!installed) {
+        text += L" (설치 안 됨)";
+    } else if (!systemFonts_[data].symbol) {
+        // 자기 이름의 글자가 없는 글꼴(□로 보임)은 화면 글꼴로 이름을 보여 줍니다.
+        auto known = canDrawOwnName_.find(face);
+        if (known == canDrawOwnName_.end()) {
+            HGDIOBJ old = SelectObject(dc, PreviewFont(face));
+            std::vector<WORD> glyphs(face.size());
+            bool ok = GetGlyphIndicesW(dc, face.c_str(), static_cast<int>(face.size()), glyphs.data(),
+                                       GGI_MARK_NONEXISTING_GLYPHS) != GDI_ERROR;
+            for (WORD g : glyphs) ok = ok && g != 0xFFFF;
+            SelectObject(dc, old);
+            known = canDrawOwnName_.emplace(face, ok).first;
+        }
+        if (known->second) font = PreviewFont(face);
+    }
+
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : (installed ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT)));
+    RECT textRect = rc;
+    textRect.left += S(4);
+    DrawTextW(dc, text.c_str(), -1, &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    SelectObject(dc, oldFont);
+    if ((item->itemState & ODS_FOCUS) && !(item->itemState & ODS_COMBOBOXEDIT)) DrawFocusRect(dc, &rc);
+}
+
+// ---------------------------------------------------------------------------
 // 그림
 
 bool MainWindow::LoadPictureFile(const wchar_t* title, nl::Picture* picture) {
@@ -931,6 +1083,8 @@ void MainWindow::OnCommand(int id, int code, HWND control) {
                 if (code == EN_CHANGE) OnInfoChanged(id);
                 return;
             case IDC_THEME:
+            case IDC_HEADING_FONT:
+            case IDC_BODY_FONT:
                 if (code == CBN_SELCHANGE) OnInfoChanged(id);
                 return;
             case IDC_CATEGORY:
@@ -1028,6 +1182,18 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_COMMAND:
             OnCommand(LOWORD(wParam), HIWORD(wParam), reinterpret_cast<HWND>(lParam));
             return 0;
+        case WM_MEASUREITEM: {
+            auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+            if (item->CtlType != ODT_COMBOBOX) break;
+            item->itemHeight = S(22);
+            return TRUE;
+        }
+        case WM_DRAWITEM: {
+            auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+            if (item->CtlID != IDC_HEADING_FONT && item->CtlID != IDC_BODY_FONT) break;
+            DrawFontItem(item);
+            return TRUE;
+        }
         case WM_APP_DOC_EDITED:
             images_.Prune(doc_);  // 지운 그림의 캐시 정리
             MarkDirty();

@@ -58,7 +58,10 @@ void SetupPageMapping(HDC hdc, double scale) {
     SetViewportExtEx(hdc, vp, vp, nullptr);
 }
 
-Renderer::Renderer() { CreateFonts(); }
+Renderer::Renderer() {
+    for (HFONT& f : fonts_) f = nullptr;
+    EnsureFonts(L"", L"");
+}
 
 Renderer::~Renderer() {
     for (HFONT f : fonts_) {
@@ -66,27 +69,37 @@ Renderer::~Renderer() {
     }
 }
 
-void Renderer::CreateFonts() {
+// 문서의 제목용·본문용 글꼴로 글꼴 개체를 만듭니다. 바뀌지 않았으면 그대로 씁니다.
+void Renderer::EnsureFonts(const std::wstring& heading, const std::wstring& body) {
+    std::wstring headingFace = FontOrDefault(heading).substr(0, LF_FACESIZE - 1);
+    std::wstring bodyFace = FontOrDefault(body).substr(0, LF_FACESIZE - 1);
+    if (fonts_[0] && headingFace == headingFace_ && bodyFace == bodyFace_) return;
+    headingFace_ = headingFace;
+    bodyFace_ = bodyFace;
+
     struct Spec {
         int height;
         int weight;
+        bool heading;
     };
     const Spec specs[FontCount] = {
-        {15, FW_NORMAL},  // FLibrary
-        {36, FW_BOLD},    // FTitle
-        {14, FW_NORMAL},  // FMeta
-        {15, FW_NORMAL},  // FGreeting
-        {12, FW_BOLD},    // FTag
-        {22, FW_BOLD},    // FHeading
-        {15, FW_NORMAL},  // FBody
-        {11, FW_NORMAL},  // FFooter
-        {15, FW_NORMAL},  // FEmpty
+        {15, FW_NORMAL, false},  // FLibrary
+        {36, FW_BOLD, true},     // FTitle
+        {14, FW_NORMAL, false},  // FMeta
+        {15, FW_NORMAL, false},  // FGreeting
+        {12, FW_BOLD, true},     // FTag
+        {22, FW_BOLD, true},     // FHeading
+        {15, FW_NORMAL, false},  // FBody
+        {11, FW_NORMAL, false},  // FFooter
+        {15, FW_NORMAL, false},  // FEmpty
     };
     for (int i = 0; i < FontCount; ++i) {
+        if (fonts_[i]) DeleteObject(fonts_[i]);
         // 높이는 논리 단위이며, 음수는 글자 높이(em) 기준이라는 뜻입니다.
-        fonts_[i] = CreateFontW(-specs[i].height, 0, 0, 0, specs[i].weight, FALSE, FALSE, FALSE,
-                                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"맑은 고딕");
+        // 설치되지 않은 글꼴이면 Windows가 비슷한 글꼴로 대신합니다.
+        fonts_[i] = CreateFontW(-specs[i].height, 0, 0, 0, specs[i].weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                                (specs[i].heading ? headingFace_ : bodyFace_).c_str());
     }
 }
 
@@ -179,7 +192,7 @@ void Renderer::NewPage() {
 }
 
 void Renderer::FlowText(int font, COLORREF color, const std::wstring& text, int left, int right, int lineHeight,
-                        UINT align, int indent, const wchar_t* bullet, COLORREF bulletColor) {
+                        UINT align, int indent, bool bullet, COLORREF bulletColor) {
     // 현재 위치에서 한 줄을 놓을 수 있는 구간을 찾습니다. 그림에 막히면 그 아래로, 쪽 끝이면 다음 쪽으로.
     auto findSpan = [&]() -> Span {
         for (int guard = 0; guard < 2000; ++guard) {
@@ -207,7 +220,10 @@ void Renderer::FlowText(int font, COLORREF color, const std::wstring& text, int 
         size_t next = 0;
         std::wstring line = TakeLine(font, text, pos, s.right - textLeft, &next);
         if (bullet && first) {
-            Add({Item::Text, RECT{s.left + 8, y_, textLeft, y_ + lineHeight}, bulletColor, font, bullet, DT_LEFT});
+            const int size = 6;
+            const int center = y_ + LineHeight(font, 0.55);  // 글자 높이의 중간쯤
+            Add({Item::Dot, RECT{s.left + 9, center - size / 2, s.left + 9 + size, center + size / 2}, bulletColor, 0,
+                 L"", 0});
         }
         Add({Item::Text, RECT{textLeft, y_, s.right, y_ + lineHeight}, color, font, line, align});
         y_ += lineHeight;
@@ -245,6 +261,7 @@ void Renderer::Layout(const Newsletter& doc) {
             RECT{p.x - kWrapGapX, p.y - kWrapGapY, p.x + p.width + kWrapGapX, p.y + p.height + kWrapGapY});
     }
 
+    EnsureFonts(doc.headingFont, doc.bodyFont);
     measure_ = CreateCompatibleDC(nullptr);
     SetupPageMapping(measure_, kMeasureScale);
 
@@ -382,7 +399,7 @@ void Renderer::AddArticle(const Newsletter& doc, const Article& article, bool fi
         if (bullet && !lastWasBullet) pending += 2;
         if (!AtTop()) y_ += pending;
         pending = 0;
-        if (bullet) FlowText(FBody, kTextColor, line.text, kMarginLeft, kMarginRight, lh, DT_LEFT, 24, L"•", bulletColor);
+        if (bullet) FlowText(FBody, kTextColor, line.text, kMarginLeft, kMarginRight, lh, DT_LEFT, 24, true, bulletColor);
         else FlowText(FBody, kTextColor, line.text, kMarginLeft, kMarginRight, lh);
         lastWasBullet = bullet;
     }
@@ -426,6 +443,16 @@ void Renderer::DrawPage(HDC hdc, int page, const Newsletter& doc, ImageLibrary* 
             case Item::Fill: {
                 HBRUSH b = CreateSolidBrush(item.color);
                 FillRect(hdc, &rc, b);
+                DeleteObject(b);
+                break;
+            }
+            case Item::Dot: {
+                HBRUSH b = CreateSolidBrush(item.color);
+                HGDIOBJ oldBrush = SelectObject(hdc, b);
+                HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
+                Ellipse(hdc, rc.left, rc.top, rc.right + 1, rc.bottom + 1);
+                SelectObject(hdc, oldPen);
+                SelectObject(hdc, oldBrush);
                 DeleteObject(b);
                 break;
             }

@@ -81,6 +81,16 @@ std::wstring PhotoHtml(const Picture& p) {
     return ImageTag(p, L"photo", style);
 }
 
+// CSS font-family 값: 고른 글꼴 다음에, 그 글꼴이 없는 컴퓨터를 위한 대체 글꼴을 붙입니다.
+std::wstring FontStack(const std::wstring& face) {
+    std::wstring name;
+    for (wchar_t c : FontOrDefault(face)) {
+        if (c != L'\'' && c != L'"' && c != L'\\' && c != L'<' && c != L'>' && c != L';' && c != L'{' && c != L'}')
+            name += c;
+    }
+    return L"'" + name + L"','Malgun Gothic','맑은 고딕','Apple SD Gothic Neo',sans-serif";
+}
+
 }  // namespace
 
 std::wstring HtmlEscape(const std::wstring& s) {
@@ -108,8 +118,9 @@ std::string ExportHtml(const Newsletter& doc) {
     h += L"<!DOCTYPE html>\n<html lang=\"ko\">\n<head>\n<meta charset=\"utf-8\">\n";
     h += L"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n";
     h += L"<title>" + HtmlEscape(docTitle) + L"</title>\n<style>\n";
-    h += L"body{margin:0;background:#e9ebee;font-family:'Malgun Gothic','맑은 고딕','Apple SD Gothic Neo',"
-         L"sans-serif;color:#222;line-height:1.7}\n";
+    h += L"body{margin:0;background:#e9ebee;font-family:" + FontStack(doc.bodyFont) +
+         L";color:#222;line-height:1.7}\n";
+    h += L".masthead h1,.article h2,.tag{font-family:" + FontStack(doc.headingFont) + L"}\n";
     h += L".paper{max-width:760px;margin:24px auto;background:#fff;padding:40px 48px;"
          L"box-shadow:0 2px 10px rgba(0,0,0,.15)}\n";
     h += L".masthead{background:" + Css(theme.primary) + L";color:#fff;border-radius:8px;padding:22px 28px;"

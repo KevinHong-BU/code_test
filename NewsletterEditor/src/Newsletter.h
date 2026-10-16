@@ -37,6 +37,8 @@ struct Newsletter {
     std::wstring publisher;    // 발행처·연락처 (맨 아래에 표시)
     std::wstring greeting;     // 머리말
     int theme = 0;             // 색상 테마 번호
+    std::wstring headingFont;  // 제호·기사 제목·분류 꼬리표 글꼴 (비어 있으면 기본 글꼴)
+    std::wstring bodyFont;     // 본문·머리말·발행처 등 나머지 글꼴 (비어 있으면 기본 글꼴)
     std::vector<Article> articles;
     std::vector<Picture> pictures;  // 뒤에 있을수록 위에 그려짐
 
@@ -53,6 +55,11 @@ struct Theme {
     Color accent;   // 보조 강조선
     Color light;    // 머리말 상자 배경
 };
+
+// 글꼴을 고르지 않았을 때 쓰는 기본 글꼴(Windows 기본 한글 글꼴).
+extern const wchar_t kDefaultFont[];
+// 비어 있으면 기본 글꼴 이름을 돌려줍니다.
+std::wstring FontOrDefault(const std::wstring& face);
 
 int ThemeCount();
 const Theme& GetTheme(int index);  // 범위를 벗어나면 0번 테마
