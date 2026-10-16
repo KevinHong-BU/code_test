@@ -1,0 +1,625 @@
+<title>비트 워크벤치</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: a register-sheet workbench. One narrow column of instrument panels; bits drawn as cells like a datasheet register map. */
+:root {
+  --bg: #eef1f5;
+  --panel: #ffffff;
+  --ink: #18202c;
+  --muted: #5b6676;
+  --line: #d3d9e2;
+  --accent: #2346c9;
+  --accent-soft: #e3e9fb;
+  --bit-on: #2346c9;
+  --bit-on-ink: #ffffff;
+  --bit-off: #f5f7fa;
+  --warn: #b4540a;
+  --warn-soft: #fcefe2;
+  --ok: #17794a;
+  --f-sign: #c0324a;
+  --f-exp: #b4730a;
+  --f-man: #2346c9;
+  --font-ui: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10141b; --panel: #171d27; --ink: #e4e9f1; --muted: #8e99aa; --line: #2b3442;
+    --accent: #7f9cff; --accent-soft: #1f2a48; --bit-on: #6d8cff; --bit-on-ink: #0d1220; --bit-off: #1c2330;
+    --warn: #f0a35e; --warn-soft: #3a2614; --ok: #5fcf95; --f-sign: #f07a8e; --f-exp: #e9b453; --f-man: #7f9cff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10141b; --panel: #171d27; --ink: #e4e9f1; --muted: #8e99aa; --line: #2b3442;
+  --accent: #7f9cff; --accent-soft: #1f2a48; --bit-on: #6d8cff; --bit-on-ink: #0d1220; --bit-off: #1c2330;
+  --warn: #f0a35e; --warn-soft: #3a2614; --ok: #5fcf95; --f-sign: #f07a8e; --f-exp: #e9b453; --f-man: #7f9cff;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 56px;
+}
+.wrap { max-width: 880px; margin: 0 auto; display: grid; gap: 20px; }
+header { display: grid; gap: 4px; }
+h1 { font-size: 1.6rem; margin: 0; font-weight: 700; letter-spacing: -0.01em; text-wrap: balance; }
+h1 .mono { font-family: var(--font-data); font-weight: 500; color: var(--accent); font-size: 1.1rem; margin-left: 8px; }
+header p { margin: 0; color: var(--muted); max-width: 62ch; }
+h2 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+.label { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; font-family: var(--font-data); }
+
+/* Global register settings */
+.settings { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--panel); }
+.seg button { font: 500 0.85rem var(--font-data); border: 0; background: transparent; color: var(--ink); padding: 6px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--bit-on-ink); }
+.seg-group { display: flex; align-items: center; gap: 8px; }
+
+/* Tabs */
+nav.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+nav.tabs button { font: 500 0.95rem var(--font-ui); border: 0; background: none; color: var(--muted); padding: 10px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+nav.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 20px; display: grid; gap: 18px; min-width: 0; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
+
+/* Base fields */
+.fields { display: grid; gap: 10px; }
+.field { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 10px; }
+.field label { font: 600 0.8rem var(--font-data); color: var(--muted); }
+.field label b { color: var(--ink); font-weight: 600; }
+input[type="text"], textarea, select {
+  font: 500 1rem var(--font-data); color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 8px 10px; width: 100%; min-width: 0;
+}
+textarea { resize: vertical; min-height: 96px; line-height: 1.5; }
+select { width: auto; font-size: 0.9rem; cursor: pointer; }
+input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input.invalid, textarea.invalid { border-color: var(--warn); background: var(--warn-soft); }
+.copy { font: 500 0.75rem var(--font-ui); border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: var(--r); padding: 5px 9px; cursor: pointer; }
+.copy:hover { color: var(--ink); border-color: var(--muted); }
+.error { color: var(--warn); font-size: 0.85rem; margin: 0; min-height: 1.3em; }
+
+/* Bit register map */
+.bits { display: grid; gap: 8px; overflow-x: auto; }
+.byte-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.nibble-pair { display: flex; gap: 6px; }
+.nibble { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; flex: 1; }
+.bit { display: grid; gap: 2px; justify-items: center; }
+.bit button {
+  width: 100%; aspect-ratio: 1 / 1.15; max-width: 44px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bit-off); color: var(--muted); font: 600 0.95rem var(--font-data); cursor: pointer; padding: 0;
+}
+.bit button.on { background: var(--bit-on); color: var(--bit-on-ink); border-color: var(--bit-on); }
+.bit button.sign { box-shadow: inset 0 -3px 0 var(--warn); }
+.bit small { font: 400 0.62rem var(--font-data); color: var(--muted); font-variant-numeric: tabular-nums; }
+.bit-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.tool { font: 500 0.8rem var(--font-data); border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: var(--r); padding: 6px 10px; cursor: pointer; }
+.tool:hover { border-color: var(--accent); color: var(--accent); }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.stat { background: var(--panel); box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line); padding: 10px 12px; display: grid; gap: 2px; min-width: 0; }
+.stat .v { font: 500 0.95rem var(--font-data); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* Calculator */
+.operands { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.operand { display: grid; gap: 6px; }
+.operand-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ops { display: grid; gap: 10px; }
+.op-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.op-group .label { width: 52px; }
+.op { font: 600 0.85rem var(--font-data); border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: var(--r); padding: 7px 11px; cursor: pointer; min-width: 48px; }
+.op[aria-pressed="true"] { background: var(--accent); color: var(--bit-on-ink); border-color: var(--accent); }
+.trace { font: 500 0.92rem var(--font-data); font-variant-numeric: tabular-nums; overflow-x: auto; background: var(--bg); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 2px; }
+.trace-row { display: grid; grid-template-columns: 4.5em auto 1fr; gap: 12px; white-space: pre; align-items: baseline; }
+.trace-row .tag { color: var(--muted); text-align: right; }
+.trace-row .dec { color: var(--muted); }
+.trace-row.result { border-top: 1px solid var(--line); padding-top: 4px; margin-top: 4px; font-weight: 600; }
+.trace-row.result .bin { color: var(--accent); }
+.chip { display: inline-flex; align-items: center; gap: 6px; font: 600 0.75rem var(--font-data); padding: 3px 9px; border-radius: 999px; letter-spacing: 0.04em; }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.ok { background: var(--accent-soft); color: var(--ok); }
+.results { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.results .stat .v { font-size: 1rem; }
+
+/* Text */
+.duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.duo > div { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.byte-table { overflow-x: auto; }
+table { border-collapse: collapse; font: 0.85rem var(--font-data); font-variant-numeric: tabular-nums; width: 100%; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font: 600 0.7rem var(--font-data); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* Float */
+.float-bits { display: flex; flex-wrap: wrap; gap: 2px; font: 600 0.9rem var(--font-data); }
+.float-bits span { width: 1.25em; text-align: center; padding: 3px 0; border-radius: 3px; background: var(--bg); }
+.float-bits span.s { color: var(--f-sign); }
+.float-bits span.e { color: var(--f-exp); }
+.float-bits span.m { color: var(--f-man); }
+.float-bits span.gap { width: 6px; background: transparent; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.85rem; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.formula { font: 500 0.95rem var(--font-data); background: var(--bg); padding: 12px 14px; border-radius: var(--r); overflow-x: auto; white-space: nowrap; }
+
+footer { color: var(--muted); font-size: 0.8rem; }
+@media (max-width: 520px) {
+  .field { grid-template-columns: 44px 1fr; }
+  .field .copy { display: none; }
+  .byte-row { grid-template-columns: 1fr; }
+  .op-group .label { width: 100%; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bit button { transition: background-color .12s, color .12s; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>비트 워크벤치 <span class="mono">0b1011</span></h1>
+    <p>2진·8진·10진·16진 변환, 비트 단위 계산, 텍스트와 IEEE 754 부동소수점의 비트 구조를 한곳에서 다룹니다. 모든 값은 아래의 비트 폭과 부호 설정에 맞춰 2의 보수로 해석됩니다.</p>
+  </header>
+
+  <div class="settings" id="settings">
+    <div class="seg-group"><span class="label">비트 폭</span>
+      <div class="seg" id="width-seg" role="group" aria-label="비트 폭">
+        <button type="button" data-bits="8">8</button><button type="button" data-bits="16">16</button><button type="button" data-bits="32">32</button><button type="button" data-bits="64">64</button>
+      </div>
+    </div>
+    <div class="seg-group"><span class="label">해석</span>
+      <div class="seg" id="sign-seg" role="group" aria-label="부호 해석">
+        <button type="button" data-signed="1">부호 있음</button><button type="button" data-signed="0">부호 없음</button>
+      </div>
+    </div>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="도구">
+    <button type="button" role="tab" id="tab-convert" data-tab="convert">진법 변환</button>
+    <button type="button" role="tab" id="tab-calc" data-tab="calc">비트 계산기</button>
+    <button type="button" role="tab" id="tab-text" data-tab="text">텍스트 ↔ 2진</button>
+    <button type="button" role="tab" id="tab-float" data-tab="float">부동소수점</button>
+  </nav>
+
+  <!-- 진법 변환 -->
+  <section class="panel" id="panel-convert" role="tabpanel" aria-labelledby="tab-convert">
+    <div class="panel-head"><h2>진법 변환</h2><p class="hint">어느 칸에 입력해도 나머지가 바로 바뀝니다. 비트 칸을 눌러 0과 1을 뒤집을 수 있습니다.</p></div>
+    <div class="fields">
+      <div class="field"><label for="cv-2"><b>BIN</b> 2</label><input type="text" id="cv-2" data-base="2" spellcheck="false" autocomplete="off"><button class="copy" type="button" data-copy="cv-2">복사</button></div>
+      <div class="field"><label for="cv-8"><b>OCT</b> 8</label><input type="text" id="cv-8" data-base="8" spellcheck="false" autocomplete="off"><button class="copy" type="button" data-copy="cv-8">복사</button></div>
+      <div class="field"><label for="cv-10"><b>DEC</b> 10</label><input type="text" id="cv-10" data-base="10" spellcheck="false" autocomplete="off" inputmode="numeric"><button class="copy" type="button" data-copy="cv-10">복사</button></div>
+      <div class="field"><label for="cv-16"><b>HEX</b> 16</label><input type="text" id="cv-16" data-base="16" spellcheck="false" autocomplete="off"><button class="copy" type="button" data-copy="cv-16">복사</button></div>
+    </div>
+    <p class="error" id="cv-error" role="status"></p>
+    <div class="bits" id="cv-bits" aria-label="비트 맵"></div>
+    <div class="bit-tools">
+      <button class="tool" type="button" data-act="clear">모두 0</button>
+      <button class="tool" type="button" data-act="fill">모두 1</button>
+      <button class="tool" type="button" data-act="invert">반전 (NOT)</button>
+      <button class="tool" type="button" data-act="neg">2의 보수 (−x)</button>
+      <button class="tool" type="button" data-act="shl">« 1</button>
+      <button class="tool" type="button" data-act="shr">» 1</button>
+      <button class="tool" type="button" data-act="swap">바이트 순서 뒤집기</button>
+      <button class="tool" type="button" data-act="toA">계산기 A로 보내기</button>
+    </div>
+    <div class="stats" id="cv-stats"></div>
+  </section>
+
+  <!-- 비트 계산기 -->
+  <section class="panel" id="panel-calc" role="tabpanel" aria-labelledby="tab-calc" hidden>
+    <div class="panel-head"><h2>비트 계산기</h2><p class="hint">결과는 선택한 비트 폭에서 잘려 나가며, 범위를 넘으면 오버플로로 표시됩니다.</p></div>
+    <div class="operands">
+      <div class="operand">
+        <div class="operand-head"><label class="label" for="ca-a">피연산자 A</label>
+          <select id="ca-a-base" aria-label="A 입력 진법"><option value="2">2진</option><option value="8">8진</option><option value="10">10진</option><option value="16">16진</option></select></div>
+        <input type="text" id="ca-a" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="operand" id="operand-b">
+        <div class="operand-head"><label class="label" for="ca-b">피연산자 B</label>
+          <select id="ca-b-base" aria-label="B 입력 진법"><option value="2">2진</option><option value="8">8진</option><option value="10">10진</option><option value="16">16진</option></select></div>
+        <input type="text" id="ca-b" spellcheck="false" autocomplete="off">
+      </div>
+    </div>
+    <div class="ops" id="ops">
+      <div class="op-group"><span class="label">산술</span>
+        <button class="op" type="button" data-op="add">+</button><button class="op" type="button" data-op="sub">−</button><button class="op" type="button" data-op="mul">×</button><button class="op" type="button" data-op="div">÷</button><button class="op" type="button" data-op="mod">mod</button><button class="op" type="button" data-op="neg">−A</button>
+      </div>
+      <div class="op-group"><span class="label">논리</span>
+        <button class="op" type="button" data-op="and">AND</button><button class="op" type="button" data-op="or">OR</button><button class="op" type="button" data-op="xor">XOR</button><button class="op" type="button" data-op="nand">NAND</button><button class="op" type="button" data-op="nor">NOR</button><button class="op" type="button" data-op="not">NOT A</button>
+      </div>
+      <div class="op-group"><span class="label">시프트</span>
+        <button class="op" type="button" data-op="shl">&lt;&lt;</button><button class="op" type="button" data-op="shr">&gt;&gt;</button><button class="op" type="button" data-op="lsr">&gt;&gt;&gt;</button><button class="op" type="button" data-op="rol">ROL</button><button class="op" type="button" data-op="ror">ROR</button>
+      </div>
+    </div>
+    <p class="error" id="ca-error" role="status"></p>
+    <div class="panel-head"><span class="label" id="ca-title">결과</span><span id="ca-flag"></span></div>
+    <div class="trace" id="ca-trace"></div>
+    <div class="results" id="ca-results"></div>
+    <div class="bit-tools"><button class="tool" type="button" id="ca-toA">결과를 A로</button><button class="tool" type="button" id="ca-toConv">결과를 변환기로</button></div>
+  </section>
+
+  <!-- 텍스트 -->
+  <section class="panel" id="panel-text" role="tabpanel" aria-labelledby="tab-text" hidden>
+    <div class="panel-head"><h2>텍스트 ↔ 2진</h2><p class="hint">UTF-8로 인코딩합니다. 한글 한 글자는 3바이트입니다.</p></div>
+    <div class="duo">
+      <div><label class="label" for="tx-text">텍스트</label><textarea id="tx-text" spellcheck="false"></textarea></div>
+      <div>
+        <div class="operand-head"><label class="label" for="tx-bytes">바이트</label>
+          <select id="tx-base" aria-label="바이트 표기 진법"><option value="2">2진</option><option value="8">8진</option><option value="10">10진</option><option value="16">16진</option></select></div>
+        <textarea id="tx-bytes" spellcheck="false"></textarea>
+      </div>
+    </div>
+    <p class="error" id="tx-error" role="status"></p>
+    <div class="byte-table"><table><thead><tr><th>문자</th><th>코드 포인트</th><th>UTF-8 바이트 (2진)</th><th>HEX</th></tr></thead><tbody id="tx-table"></tbody></table></div>
+  </section>
+
+  <!-- 부동소수점 -->
+  <section class="panel" id="panel-float" role="tabpanel" aria-labelledby="tab-float" hidden>
+    <div class="panel-head"><h2>IEEE 754 부동소수점</h2>
+      <div class="seg" id="fl-seg" role="group" aria-label="정밀도"><button type="button" data-fbits="32">float32</button><button type="button" data-fbits="64">float64</button></div>
+    </div>
+    <div class="fields">
+      <div class="field"><label for="fl-dec"><b>값</b></label><input type="text" id="fl-dec" spellcheck="false" autocomplete="off"><button class="copy" type="button" data-copy="fl-dec">복사</button></div>
+      <div class="field"><label for="fl-hex"><b>HEX</b></label><input type="text" id="fl-hex" spellcheck="false" autocomplete="off"><button class="copy" type="button" data-copy="fl-hex">복사</button></div>
+    </div>
+    <p class="error" id="fl-error" role="status"></p>
+    <div class="legend"><span><i style="background:var(--f-sign)"></i>부호</span><span><i style="background:var(--f-exp)"></i>지수</span><span><i style="background:var(--f-man)"></i>가수</span></div>
+    <div class="float-bits" id="fl-bits"></div>
+    <div class="formula" id="fl-formula"></div>
+    <div class="stats" id="fl-stats"></div>
+  </section>
+
+  <footer>Infinity, NaN, -0 같은 특수값도 입력할 수 있습니다. 2진·16진 입력에는 0b, 0x 접두사와 공백, 밑줄을 써도 됩니다.</footer>
+</div>
+
+<script src="bincalc.js"></script>
+<script>
+(function () {
+  'use strict';
+  const C = window.BinCalc;
+  const $ = (id) => document.getElementById(id);
+  const state = { bits: 8, signed: true, value: -42n, tab: 'convert', op: 'add', fbits: 32 };
+
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem('bitbench') || '{}');
+      if ([8, 16, 32, 64].includes(s.bits)) state.bits = s.bits;
+      if (typeof s.signed === 'boolean') state.signed = s.signed;
+      if (['convert', 'calc', 'text', 'float'].includes(s.tab)) state.tab = s.tab;
+    } catch (e) { /* 저장소를 쓸 수 없으면 기본값 사용 */ }
+    const h = location.hash.slice(1);
+    if (['convert', 'calc', 'text', 'float'].includes(h)) state.tab = h;
+  }
+  function save() {
+    try { localStorage.setItem('bitbench', JSON.stringify({ bits: state.bits, signed: state.signed, tab: state.tab })); } catch (e) {}
+  }
+
+  function copyText(text, btn) {
+    const done = () => { const t = btn.textContent; btn.textContent = '복사됨'; setTimeout(() => (btn.textContent = t), 1200); };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => fallback());
+    else fallback();
+    function fallback() { const el = $(btn.dataset.copy); if (el && el.select) el.select(); }
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-copy]');
+    if (b) copyText($(b.dataset.copy).value, b);
+  });
+
+  // ---- 공통 설정 ----
+  function renderSettings() {
+    document.querySelectorAll('#width-seg button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.bits === state.bits)));
+    document.querySelectorAll('#sign-seg button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.signed === '1') === state.signed)));
+    document.querySelectorAll('nav.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)));
+    ['convert', 'calc', 'text', 'float'].forEach((t) => ($('panel-' + t).hidden = t !== state.tab));
+  }
+  $('width-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    state.bits = +b.dataset.bits;
+    state.value = C.interpret(state.value, state.bits, state.signed);
+    refreshAll();
+  });
+  $('sign-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    state.signed = b.dataset.signed === '1';
+    state.value = C.interpret(state.value, state.bits, state.signed);
+    refreshAll();
+  });
+  document.querySelector('nav.tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    state.tab = b.dataset.tab; renderSettings(); save();
+  });
+
+  // ---- 진법 변환 ----
+  const cvInputs = [2, 8, 10, 16].map((b) => $('cv-' + b));
+  function renderConvert(skip) {
+    const { bits, signed, value } = state;
+    cvInputs.forEach((inp) => {
+      if (inp === skip) return;
+      const base = +inp.dataset.base;
+      inp.value = C.format(value, base, bits, signed, { group: base !== 10 && base !== 8 });
+      inp.classList.remove('invalid');
+    });
+    if (!skip) $('cv-error').textContent = '';
+    renderBits();
+    renderStats();
+  }
+  function renderBits() {
+    const { bits, value } = state;
+    const arr = C.bitArray(value, bits);
+    const box = $('cv-bits');
+    box.innerHTML = '';
+    for (let byteStart = bits - 8, row = null; byteStart >= 0; byteStart -= 8) {
+      if ((bits - 8 - byteStart) % 16 === 0) { row = document.createElement('div'); row.className = 'byte-row'; box.appendChild(row); }
+      const pair = document.createElement('div'); pair.className = 'nibble-pair';
+      for (let n = 1; n >= 0; n--) {
+        const nib = document.createElement('div'); nib.className = 'nibble';
+        for (let k = 3; k >= 0; k--) {
+          const i = byteStart + n * 4 + k;
+          const cell = document.createElement('div'); cell.className = 'bit';
+          const btn = document.createElement('button');
+          btn.type = 'button'; btn.textContent = arr[i]; btn.dataset.i = i;
+          btn.className = (arr[i] ? 'on' : '') + (state.signed && i === bits - 1 ? ' sign' : '');
+          btn.setAttribute('aria-label', `비트 ${i}: ${arr[i]}`);
+          const lab = document.createElement('small'); lab.textContent = i;
+          cell.append(btn, lab); nib.appendChild(cell);
+        }
+        pair.appendChild(nib);
+      }
+      row.appendChild(pair);
+    }
+  }
+  $('cv-bits').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-i]'); if (!b) return;
+    state.value = C.toggleBit(state.value, state.bits, state.signed, +b.dataset.i);
+    renderConvert();
+  });
+  function renderStats() {
+    const { bits, signed, value } = state;
+    const r = C.range(bits, signed);
+    const ones = C.popcount(value, bits);
+    let lead = 0, trail = 0;
+    const arr = C.bitArray(value, bits);
+    for (let i = bits - 1; i >= 0 && !arr[i]; i--) lead++;
+    for (let i = 0; i < bits && !arr[i]; i++) trail++;
+    const stats = [
+      ['부호 있음 해석', C.format(value, 10, bits, true, { group: true })],
+      ['부호 없음 해석', C.format(value, 10, bits, false, { group: true })],
+      ['1의 개수', `${ones} / ${bits}` + (ones % 2 ? ' (홀수 패리티)' : ' (짝수 패리티)')],
+      ['앞쪽 0 / 뒤쪽 0', `${lead} / ${trail}`],
+      ['2의 거듭제곱', ones === 1 && !(signed && arr[bits - 1]) ? `예 (2^${trail})` : '아니요'],
+      ['표현 범위', `${r.min.toLocaleString('en-US')} … ${r.max.toLocaleString('en-US')}`],
+    ];
+    $('cv-stats').innerHTML = stats.map(([k, v]) => `<div class="stat"><span class="label">${k}</span><span class="v">${v}</span></div>`).join('');
+  }
+  cvInputs.forEach((inp) => inp.addEventListener('input', () => {
+    if (inp.value.trim() === '' || inp.value.trim() === '-') { $('cv-error').textContent = ''; inp.classList.remove('invalid'); return; }
+    try {
+      const v = C.parseValue(inp.value, +inp.dataset.base);
+      const f = C.fit(v, state.bits, state.signed);
+      // 2/8/16진수는 비트 패턴 입력이므로 비트 폭 안이면 정상으로 봅니다.
+      const patternOk = inp.dataset.base !== '10' && v >= 0n && v <= C.mask(state.bits);
+      state.value = f.value;
+      inp.classList.remove('invalid');
+      $('cv-error').textContent = f.overflow && !patternOk ? `${state.bits}비트 범위를 넘어 잘렸습니다.` : '';
+      renderConvert(inp);
+    } catch (err) {
+      inp.classList.add('invalid'); $('cv-error').textContent = err.message;
+    }
+  }));
+  cvInputs.forEach((inp) => inp.addEventListener('blur', () => { if (!inp.classList.contains('invalid')) renderConvert(); }));
+  document.querySelector('#panel-convert .bit-tools').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const { bits, signed } = state; let v = state.value;
+    const op = (o, x) => C.calculate(o, v, x, bits, signed).value;
+    switch (b.dataset.act) {
+      case 'clear': v = 0n; break;
+      case 'fill': v = C.interpret(C.mask(bits), bits, signed); break;
+      case 'invert': v = op('not', 0n); break;
+      case 'neg': v = op('neg', 0n); break;
+      case 'shl': v = op('shl', 1n); break;
+      case 'shr': v = op('shr', 1n); break;
+      case 'swap': {
+        let u = C.toUnsigned(v, bits), r = 0n;
+        for (let i = 0; i < bits / 8; i++) { r = (r << 8n) | (u & 255n); u >>= 8n; }
+        v = C.interpret(r, bits, signed); break;
+      }
+      case 'toA': setOperand('a', v); state.tab = 'calc'; renderSettings(); save(); return;
+    }
+    state.value = v; renderConvert();
+  });
+
+  // ---- 계산기 ----
+  const calc = { a: 0b10110110n, b: 0b01101100n };
+  function setOperand(which, v) {
+    calc[which] = C.interpret(v, state.bits, state.signed);
+    const base = +$('ca-' + which + '-base').value;
+    $('ca-' + which).value = C.format(calc[which], base, state.bits, state.signed, { group: base === 2 || base === 16 });
+    $('ca-' + which).classList.remove('invalid');
+    renderCalc();
+  }
+  ['a', 'b'].forEach((w) => {
+    $('ca-' + w).addEventListener('input', () => {
+      try {
+        calc[w] = C.fit(C.parseValue($('ca-' + w).value, +$('ca-' + w + '-base').value), state.bits, state.signed).value;
+        $('ca-' + w).classList.remove('invalid');
+        renderCalc();
+      } catch (err) {
+        $('ca-' + w).classList.add('invalid'); $('ca-error').textContent = `${w.toUpperCase()}: ${err.message}`;
+      }
+    });
+    $('ca-' + w + '-base').addEventListener('change', () => setOperand(w, calc[w]));
+  });
+  $('ops').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-op]'); if (!b) return;
+    state.op = b.dataset.op; renderCalc();
+  });
+  let lastResult = null;
+  function renderCalc() {
+    const { bits, signed, op } = state;
+    const unary = C.OPS[op].arity === 1;
+    document.querySelectorAll('#ops .op').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.op === op)));
+    $('operand-b').style.opacity = unary ? 0.45 : 1;
+    $('ca-title').textContent = C.OPS[op].label;
+    const a = C.interpret(calc.a, bits, signed), b = C.interpret(calc.b, bits, signed);
+    const bin = (v) => C.format(v, 2, bits, signed, { group: true });
+    const dec = (v) => C.format(v, 10, bits, signed);
+    const row = (tag, v, cls) => `<div class="trace-row ${cls || ''}"><span class="tag">${tag}</span><span class="bin">${bin(v)}</span><span class="dec">${dec(v)}</span></div>`;
+    let html = row('A', a) + (unary ? '' : row('B', b));
+    try {
+      const r = C.calculate(op, a, b, bits, signed);
+      lastResult = r.value;
+      $('ca-error').textContent = '';
+      html += row('= ' + C.OPS[op].symbol, r.value, 'result');
+      $('ca-flag').innerHTML = r.overflow
+        ? '<span class="chip warn">오버플로 · 비트 폭에서 잘림</span>'
+        : '<span class="chip ok">정상 범위</span>';
+      const cells = [
+        ['BIN', C.format(r.value, 2, bits, signed, { group: true })],
+        ['HEX', '0x' + C.format(r.value, 16, bits, signed, { group: true })],
+        ['DEC (부호 있음)', C.format(r.value, 10, bits, true, { group: true })],
+        ['DEC (부호 없음)', C.format(r.value, 10, bits, false, { group: true })],
+        ['OCT', '0o' + C.format(r.value, 8, bits, signed)],
+      ];
+      $('ca-results').innerHTML = cells.map(([k, v]) => `<div class="stat"><span class="label">${k}</span><span class="v">${v}</span></div>`).join('');
+    } catch (err) {
+      lastResult = null;
+      $('ca-error').textContent = err.message;
+      $('ca-flag').innerHTML = '';
+      $('ca-results').innerHTML = '';
+    }
+    $('ca-trace').innerHTML = html;
+  }
+  $('ca-toA').addEventListener('click', () => { if (lastResult !== null) setOperand('a', lastResult); });
+  $('ca-toConv').addEventListener('click', () => {
+    if (lastResult === null) return;
+    state.value = lastResult; state.tab = 'convert'; renderSettings(); renderConvert(); save();
+  });
+
+  // ---- 텍스트 ----
+  function hexOf(b) { return b.toString(16).toUpperCase().padStart(2, '0'); }
+  function renderTextTable(text) {
+    const rows = [];
+    for (const ch of Array.from(text).slice(0, 200)) {
+      const bytes = C.textToBytes(ch);
+      const label = ch === ' ' ? '␠' : ch === '\n' ? '↵' : ch;
+      rows.push(`<tr><td>${label.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</td><td>U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}</td><td>${C.formatBytes(bytes, 2)}</td><td>${bytes.map(hexOf).join(' ')}</td></tr>`);
+    }
+    $('tx-table').innerHTML = rows.join('');
+  }
+  function textToBytesView() {
+    const text = $('tx-text').value;
+    $('tx-bytes').value = C.formatBytes(C.textToBytes(text), +$('tx-base').value);
+    $('tx-bytes').classList.remove('invalid'); $('tx-error').textContent = '';
+    renderTextTable(text);
+  }
+  $('tx-text').addEventListener('input', textToBytesView);
+  $('tx-base').addEventListener('change', textToBytesView);
+  $('tx-bytes').addEventListener('input', () => {
+    try {
+      const text = C.bytesToText(C.parseBytes($('tx-bytes').value, +$('tx-base').value));
+      $('tx-text').value = text;
+      $('tx-bytes').classList.remove('invalid'); $('tx-error').textContent = '';
+      renderTextTable(text);
+    } catch (err) {
+      $('tx-bytes').classList.add('invalid');
+      $('tx-error').textContent = err instanceof TypeError ? '올바른 UTF-8 바이트 순서가 아닙니다.' : err.message;
+    }
+  });
+
+  // ---- 부동소수점 ----
+  let fpattern = C.floatToBits(0.1, 32);
+  function parseFloatInput(s) {
+    const t = s.trim().toLowerCase().replace(/[\s_,]/g, '');
+    if (['inf', 'infinity', '+inf', '+infinity', '∞'].includes(t)) return Infinity;
+    if (['-inf', '-infinity', '-∞'].includes(t)) return -Infinity;
+    if (t === 'nan') return NaN;
+    if (t === '' || !/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/.test(t)) throw new Error('10진수 실수를 입력하세요. 예: 3.14, -1e-7, Infinity');
+    return Number(t);
+  }
+  function renderFloat(skip) {
+    const fb = state.fbits;
+    document.querySelectorAll('#fl-seg button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.fbits === fb)));
+    const val = C.bitsToFloat(fpattern, fb);
+    if (skip !== 'dec') $('fl-dec').value = Object.is(val, -0) ? '-0' : String(val);
+    if (skip !== 'hex') $('fl-hex').value = C.format(fpattern, 16, fb, false, { group: true });
+    ['fl-dec', 'fl-hex'].forEach((id) => id !== 'fl-' + skip && $(id).classList.remove('invalid'));
+    const f = C.floatFields(fpattern, fb);
+    const bitsStr = C.format(fpattern, 2, fb, false);
+    let html = '';
+    for (let i = 0; i < fb; i++) {
+      const cls = i === 0 ? 's' : i <= f.eBits ? 'e' : 'm';
+      if (i === 1 || i === 1 + f.eBits) html += '<span class="gap"></span>';
+      html += `<span class="${cls}">${bitsStr[i]}</span>`;
+    }
+    $('fl-bits').innerHTML = html;
+    const sgn = f.sign ? '−' : '+';
+    const mant = (Number(f.mantissa) / 2 ** f.mBits);
+    const formulas = {
+      normal: `${sgn}1.${f.mantissa.toString(2).padStart(f.mBits, '0').replace(/0+$/, '') || '0'}₂ × 2^${f.unbiased}  =  ${sgn}${(1 + mant).toPrecision(fb === 32 ? 9 : 17)} × 2^${f.unbiased}`,
+      subnormal: `${sgn}0.${f.mantissa.toString(2).padStart(f.mBits, '0').replace(/0+$/, '')}₂ × 2^${f.unbiased}  (비정규수)`,
+      zero: `${sgn}0  (지수와 가수가 모두 0)`,
+      infinity: `${sgn}∞  (지수 비트 전부 1, 가수 0)`,
+      nan: 'NaN  (지수 비트 전부 1, 가수 ≠ 0)',
+    };
+    $('fl-formula').textContent = formulas[f.kind];
+    const kinds = { normal: '정규수', subnormal: '비정규수', zero: '0', infinity: '무한대', nan: 'NaN' };
+    const exact = fb === 32 && Number.isFinite(val) ? val.toPrecision(9) : String(val);
+    const stats = [
+      ['종류', kinds[f.kind]],
+      ['부호 비트', `${f.sign} (${f.sign ? '음수' : '양수'})`],
+      [`지수 (${f.eBits}비트)`, `${f.exponent} − ${f.bias} = ${f.kind === 'normal' || f.kind === 'subnormal' ? f.unbiased : '—'}`],
+      [`가수 (${f.mBits}비트)`, '0x' + f.mantissa.toString(16).toUpperCase()],
+      ['저장된 값', exact],
+    ];
+    $('fl-stats').innerHTML = stats.map(([k, v]) => `<div class="stat"><span class="label">${k}</span><span class="v">${v}</span></div>`).join('');
+  }
+  $('fl-dec').addEventListener('input', () => {
+    try {
+      fpattern = C.floatToBits(parseFloatInput($('fl-dec').value), state.fbits);
+      $('fl-dec').classList.remove('invalid'); $('fl-error').textContent = '';
+      renderFloat('dec');
+    } catch (err) { $('fl-dec').classList.add('invalid'); $('fl-error').textContent = err.message; }
+  });
+  $('fl-hex').addEventListener('input', () => {
+    try {
+      const v = C.parseValue($('fl-hex').value, 16);
+      if (v < 0n || v > C.mask(state.fbits)) throw new Error(`${state.fbits}비트(16진수 ${state.fbits / 4}자리)를 넘었습니다.`);
+      fpattern = v;
+      $('fl-hex').classList.remove('invalid'); $('fl-error').textContent = '';
+      renderFloat('hex');
+    } catch (err) { $('fl-hex').classList.add('invalid'); $('fl-error').textContent = err.message; }
+  });
+  $('fl-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const val = C.bitsToFloat(fpattern, state.fbits);
+    state.fbits = +b.dataset.fbits;
+    fpattern = C.floatToBits(val, state.fbits);
+    $('fl-error').textContent = '';
+    renderFloat();
+  });
+
+  function refreshAll() {
+    renderSettings();
+    renderConvert();
+    setOperand('a', calc.a);
+    setOperand('b', calc.b);
+    save();
+  }
+
+  load();
+  $('ca-a-base').value = '2'; $('ca-b-base').value = '2';
+  $('tx-text').value = 'Hi 비트';
+  $('tx-base').value = '2';
+  state.value = C.interpret(state.value, state.bits, state.signed);
+  refreshAll();
+  textToBytesView();
+  renderFloat();
+})();
+</script>
