@@ -25,17 +25,24 @@ public:
     static bool ProbeSize(const std::string& data, int* width, int* height);
 
     // 캐시된 그림의 픽셀 크기(EXIF 회전 반영). 읽을 수 없으면 false.
-    bool PixelSize(const nl::Picture& picture, int* width, int* height);
+    bool PixelSize(int id, const std::string& data, int* width, int* height);
+    bool PixelSize(const nl::Picture& picture, int* width, int* height) {
+        return PixelSize(picture.id, picture.data, width, height);
+    }
 
     // 논리 좌표 rect에 그림을 그립니다. forPrint면 원본 해상도, 아니면 화면용 축소본을 씁니다.
-    void Draw(HDC hdc, const nl::Picture& picture, const RECT& rect, bool forPrint);
+    // id는 문서 안에서 고유한 그림 번호(그림·도서 표지 공통), data는 그림 파일 내용입니다.
+    void Draw(HDC hdc, int id, const std::string& data, const RECT& rect, bool forPrint);
+    void Draw(HDC hdc, const nl::Picture& picture, const RECT& rect, bool forPrint) {
+        Draw(hdc, picture.id, picture.data, rect, forPrint);
+    }
 
-    // 문서에 더 이상 없는 그림을 캐시에서 지웁니다.
+    // 문서에 더 이상 없는 그림·표지를 캐시에서 지웁니다.
     void Prune(const nl::Newsletter& doc);
 
 private:
     struct Entry;
-    Entry* Get(const nl::Picture& picture);
+    Entry* Get(int id, const std::string& data);
 
     std::map<int, std::unique_ptr<Entry>> cache_;
 };

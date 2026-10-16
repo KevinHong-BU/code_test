@@ -109,6 +109,7 @@ bool StartsWith(const std::wstring& s, const wchar_t* prefix) {
 }  // namespace
 
 const wchar_t kDefaultFont[] = L"맑은 고딕";
+const wchar_t kPageBreakMarker[] = L"[쪽 나누기]";
 
 std::wstring FontOrDefault(const std::wstring& face) {
     std::wstring trimmed = Trim(face);
@@ -157,6 +158,8 @@ std::wstring FormatFontSize(int halfPoints) {
 int Newsletter::NextPictureId() const {
     int id = 0;
     for (const Picture& p : pictures) id = std::max(id, p.id);
+    for (const Article& a : articles)
+        for (const Book& b : a.books) id = std::max(id, b.coverId);
     return id + 1;
 }
 
@@ -313,32 +316,54 @@ Newsletter CreateSample() {
         L"그리고 사서가 고른 추천 도서를 소개합니다. 도서관에서 여유로운 하루를 보내세요.";
     doc.theme = 0;
 
-    doc.articles.push_back({L"공지사항", L"10월 휴관일 안내",
-                            L"- 정기 휴관: 매주 월요일\n"
-                            L"- 임시 휴관: 10월 9일(목) 한글날\n"
-                            L"\n"
-                            L"휴관일에도 정문 옆 무인 반납함은 정상 운영합니다."});
-    doc.articles.push_back({L"행사·프로그램", L"가을맞이 작가와의 만남",
-                            L"그림책 작가를 초대해 창작 이야기를 듣고 함께 그림책을 만들어 봅니다.\n"
-                            L"\n"
-                            L"- 일시: 10월 25일(토) 오후 2시\n"
-                            L"- 장소: 2층 다목적실\n"
-                            L"- 대상: 초등학생과 보호자 30명 (선착순)\n"
-                            L"- 신청: 도서관 홈페이지 또는 1층 안내데스크"});
-    doc.articles.push_back({L"신착 도서", L"이달의 신착 도서",
-                            L"9월에 새로 들어온 책 가운데 일부를 소개합니다.\n"
-                            L"- 『바람이 머무는 서가』 / 김하늘 지음\n"
-                            L"- 『처음 만나는 우주 이야기』 / 이별빛 지음\n"
-                            L"- 『우리 동네 숲 산책』 / 박나무 지음\n"
-                            L"- 『하루 한 장 글쓰기』 / 정연필 지음"});
-    doc.articles.push_back({L"추천 도서", L"사서가 추천하는 가을 책",
-                            L"『바람이 머무는 서가』는 작은 마을 도서관을 지키는 사서의 일 년을 "
-                            L"따뜻하게 그린 소설입니다. 계절마다 바뀌는 서가 풍경과 이용자들의 이야기가 "
-                            L"잔잔한 울림을 줍니다. 가을밤, 차 한 잔과 함께 읽기를 권합니다."});
-    doc.articles.push_back({L"이용 안내", L"모바일 회원증을 이용하세요",
-                            L"도서관 앱에서 모바일 회원증을 발급받으면 실물 카드 없이도 "
-                            L"대출과 열람실 이용이 가능합니다.\n"
-                            L"- 앱 설치 후 로그인 → [내 정보] → [모바일 회원증]"});
+    auto article = [&doc](const wchar_t* category, const wchar_t* title, const wchar_t* body) -> Article& {
+        Article a;
+        a.category = category;
+        a.title = title;
+        a.body = body;
+        doc.articles.push_back(a);
+        return doc.articles.back();
+    };
+    auto book = [](const wchar_t* title, const wchar_t* author, const wchar_t* publisher, const wchar_t* year,
+                   const wchar_t* call, const wchar_t* description) {
+        Book b;
+        b.title = title;
+        b.author = author;
+        b.publisher = publisher;
+        b.year = year;
+        b.callNumber = call;
+        b.description = description;
+        return b;
+    };
+
+    article(L"공지사항", L"10월 휴관일 안내",
+            L"- 정기 휴관: 매주 월요일\n"
+            L"- 임시 휴관: 10월 9일(목) 한글날\n"
+            L"\n"
+            L"휴관일에도 정문 옆 무인 반납함은 정상 운영합니다.");
+    article(L"행사·프로그램", L"가을맞이 작가와의 만남",
+            L"그림책 작가를 초대해 창작 이야기를 듣고 함께 그림책을 만들어 봅니다.\n"
+            L"\n"
+            L"- 일시: 10월 25일(토) 오후 2시\n"
+            L"- 장소: 2층 다목적실\n"
+            L"- 대상: 초등학생과 보호자 30명 (선착순)\n"
+            L"- 신청: 도서관 홈페이지 또는 1층 안내데스크");
+    Article& newBooks = article(L"신착 도서", L"이달의 신착 도서", L"9월에 새로 들어온 책 가운데 일부를 소개합니다.");
+    newBooks.bookColumns = 2;
+    newBooks.books = {
+        book(L"바람이 머무는 서가", L"김하늘", L"숲속출판", L"2026", L"813.7-김92ㅂ", L"작은 마을 도서관 사서의 일 년"),
+        book(L"처음 만나는 우주 이야기", L"이별빛", L"하늘책방", L"2026", L"440-이44ㅊ", L"어린이를 위한 천문학 입문"),
+        book(L"우리 동네 숲 산책", L"박나무", L"초록길", L"2025", L"480.9-박192ㅇ", L"계절별 숲 관찰 안내서"),
+        book(L"하루 한 장 글쓰기", L"정연필", L"문장공방", L"2026", L"802-정64ㅎ", L"매일 쓰는 짧은 글 연습"),
+    };
+    Article& picks = article(L"추천 도서", L"사서가 추천하는 가을 책", L"");
+    picks.books = {book(L"바람이 머무는 서가", L"김하늘", L"숲속출판", L"2026", L"813.7-김92ㅂ",
+                        L"작은 마을 도서관을 지키는 사서의 일 년을 따뜻하게 그린 소설입니다. 계절마다 바뀌는 "
+                        L"서가 풍경과 이용자들의 이야기가 잔잔한 울림을 줍니다. 가을밤, 차 한 잔과 함께 읽기를 권합니다.")};
+    article(L"이용 안내", L"모바일 회원증을 이용하세요",
+            L"도서관 앱에서 모바일 회원증을 발급받으면 실물 카드 없이도 "
+            L"대출과 열람실 이용이 가능합니다.\n"
+            L"- 앱 설치 후 로그인 → [내 정보] → [모바일 회원증]");
     return doc;
 }
 
@@ -395,6 +420,8 @@ std::vector<BodyLine> ParseBody(const std::wstring& body) {
         std::wstring line = Trim(text.substr(start, end - start));
         if (line.empty()) {
             lines.push_back({BodyLine::Blank, L""});
+        } else if (line == kPageBreakMarker || line == L"[쪽나누기]") {
+            lines.push_back({BodyLine::PageBreak, L""});
         } else if (StartsWith(line, L"- ") || StartsWith(line, L"* ") || StartsWith(line, L"• ") ||
                    StartsWith(line, L"· ")) {
             lines.push_back({BodyLine::Bullet, Trim(line.substr(2))});
@@ -496,6 +523,29 @@ std::string Serialize(const Newsletter& doc) {
         put(L"category", a.category);
         put(L"title", a.title);
         put(L"body", a.body);
+        if (!Trim(a.titleFont).empty()) put(L"titleFont", Trim(a.titleFont));
+        if (a.titleSize) put(L"titleSize", FormatFontSize(a.titleSize));
+        if (!a.titleBold) put(L"titleBold", L"0");
+        if (a.titleAlign != TitleAlign::Left)
+            put(L"titleAlign", a.titleAlign == TitleAlign::Center ? L"center" : L"right");
+        if (a.pageBreakBefore) put(L"pageBreak", L"1");
+        if (a.bookColumns == 2) put(L"bookColumns", L"2");
+        for (const Book& b : a.books) {
+            w += L"\n[book]\n";
+            put(L"title", b.title);
+            put(L"author", b.author);
+            put(L"publisher", b.publisher);
+            put(L"year", b.year);
+            put(L"callNumber", b.callNumber);
+            put(L"description", b.description);
+            if (!b.cover.empty()) {
+                put(L"coverWidth", std::to_wstring(b.coverWidth));
+                put(L"coverHeight", std::to_wstring(b.coverHeight));
+                w += L"cover=";
+                w += FromUtf8(Base64Encode(b.cover));
+                w += L'\n';
+            }
+        }
     }
     for (const Picture& p : doc.pictures) {
         w += L"\n[picture]\n";
@@ -520,7 +570,7 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
     std::wstring text = NormalizeNewlines(FromUtf8(bytes));
 
     Newsletter doc;
-    enum { None, Header, InArticle, InPicture } section = None;
+    enum { None, Header, InArticle, InPicture, InBook } section = None;
     bool sawHeader = false;
     size_t start = 0;
     int lineNo = 0;
@@ -542,6 +592,15 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
             if (!sawHeader) break;
             section = InArticle;
             doc.articles.emplace_back();
+            continue;
+        }
+        if (trimmed == L"[book]") {
+            if (!sawHeader || doc.articles.empty()) {
+                error = std::to_wstring(lineNo) + L"번째 줄: 도서가 기사 밖에 있습니다.";
+                return false;
+            }
+            section = InBook;
+            doc.articles.back().books.emplace_back();
             continue;
         }
         if (trimmed == L"[picture]") {
@@ -600,16 +659,47 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
                 error = std::to_wstring(lineNo) + L"번째 줄의 그림 데이터가 손상되었습니다.";
                 return false;
             }
+        } else if (section == InBook) {
+            Book& b = doc.articles.back().books.back();
+            if (key == L"title") b.title = value;
+            else if (key == L"author") b.author = value;
+            else if (key == L"publisher") b.publisher = value;
+            else if (key == L"year") b.year = value;
+            else if (key == L"callNumber") b.callNumber = value;
+            else if (key == L"description") b.description = value;
+            else if (key == L"coverWidth") b.coverWidth = std::max(0, ToInt(value, 0));
+            else if (key == L"coverHeight") b.coverHeight = std::max(0, ToInt(value, 0));
+            else if (key == L"cover" && !Base64Decode(ToUtf8(Trim(value)), b.cover)) {
+                error = std::to_wstring(lineNo) + L"번째 줄의 표지 그림 데이터가 손상되었습니다.";
+                return false;
+            }
         } else {
             Article& a = doc.articles.back();
             if (key == L"category") a.category = value;
             else if (key == L"title") a.title = value;
             else if (key == L"body") a.body = value;
+            else if (key == L"titleFont") a.titleFont = Trim(value);
+            else if (key == L"titleSize") ParseFontSize(value, &a.titleSize);
+            else if (key == L"titleBold") a.titleBold = Trim(value) != L"0";
+            else if (key == L"titleAlign") {
+                std::wstring v = Trim(value);
+                a.titleAlign = v == L"center" ? TitleAlign::Center : v == L"right" ? TitleAlign::Right : TitleAlign::Left;
+            }
+            else if (key == L"pageBreak") a.pageBreakBefore = Trim(value) == L"1";
+            else if (key == L"bookColumns") a.bookColumns = Trim(value) == L"2" ? 2 : 1;
         }
     }
     if (!sawHeader) {
         error = L"도서관 소식지 파일이 아닙니다.";
         return false;
+    }
+    // 표지 그림 캐시 번호를 그림 번호와 겹치지 않게 매기고, 크기 정보가 없는 표지는 버립니다.
+    int nextId = static_cast<int>(doc.pictures.size()) + 1;
+    for (Article& a : doc.articles) {
+        for (Book& b : a.books) {
+            if (b.cover.empty() || b.coverWidth < 1 || b.coverHeight < 1) b.cover.clear();
+            else b.coverId = nextId++;
+        }
     }
     // 내용이 없거나 크기가 잘못된 그림은 버립니다.
     doc.pictures.erase(std::remove_if(doc.pictures.begin(), doc.pictures.end(),

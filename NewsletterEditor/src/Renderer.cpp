@@ -67,6 +67,20 @@ Renderer::~Renderer() {
     for (HFONT f : fonts_) {
         if (f) DeleteObject(f);
     }
+    for (HFONT f : extraFonts_) DeleteObject(f);
+}
+
+int Renderer::ExtraFont(const std::wstring& face, double height, int weight) {
+    auto key = std::make_tuple(face.substr(0, LF_FACESIZE - 1), static_cast<int>(std::lround(height)), weight);
+    auto it = extraFontIndex_.find(key);
+    if (it != extraFontIndex_.end()) return it->second;
+    HFONT font = CreateFontW(-std::get<1>(key), 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                             std::get<0>(key).c_str());
+    extraFonts_.push_back(font);
+    int index = FontCount + static_cast<int>(extraFonts_.size()) - 1;
+    extraFontIndex_[key] = index;
+    return index;
 }
 
 // 문서의 글꼴·글자 크기로 글꼴 개체를 만듭니다. 바뀌지 않았으면 그대로 씁니다.
@@ -85,6 +99,7 @@ void Renderer::EnsureFonts(const Newsletter& doc) {
     const double body = key.bodySize * unitsPerHalfPoint;
     const double title = key.titleSize * unitsPerHalfPoint;
     bodyUnits_ = body;
+    headingUnits_ = heading;
 
     struct Spec {
         double height;
@@ -101,6 +116,7 @@ void Renderer::EnsureFonts(const Newsletter& doc) {
         {body, FW_NORMAL, false},                                  // FBody
         {std::clamp(body * 0.73, 9.0, 14.0), FW_NORMAL, false},    // FFooter
         {body, FW_NORMAL, false},                                  // FEmpty
+        {body * 1.08, FW_BOLD, false},                             // FBookTitle
     };
     for (int i = 0; i < FontCount; ++i) {
         if (fonts_[i]) DeleteObject(fonts_[i]);
@@ -114,7 +130,7 @@ void Renderer::EnsureFonts(const Newsletter& doc) {
 }
 
 int Renderer::LineHeight(int font, double spacing) const {
-    HGDIOBJ old = SelectObject(measure_, fonts_[font]);
+    HGDIOBJ old = SelectObject(measure_, Font(font));
     TEXTMETRICW tm{};
     GetTextMetricsW(measure_, &tm);
     SelectObject(measure_, old);
@@ -122,7 +138,7 @@ int Renderer::LineHeight(int font, double spacing) const {
 }
 
 int Renderer::TextWidth(int font, const std::wstring& s) const {
-    HGDIOBJ old = SelectObject(measure_, fonts_[font]);
+    HGDIOBJ old = SelectObject(measure_, Font(font));
     SIZE size{};
     GetTextExtentPoint32W(measure_, s.c_str(), static_cast<int>(s.size()), &size);
     SelectObject(measure_, old);
@@ -132,7 +148,7 @@ int Renderer::TextWidth(int font, const std::wstring& s) const {
 // 공백(어절) 단위로 줄을 나누고, 한 어절이 너무 길면 글자 단위로 자릅니다.
 std::wstring Renderer::TakeLine(int font, const std::wstring& text, size_t pos, int width, size_t* next) const {
     const size_t len = text.size();
-    HGDIOBJ old = SelectObject(measure_, fonts_[font]);
+    HGDIOBJ old = SelectObject(measure_, Font(font));
     int fit = 0;
     SIZE size{};
     GetTextExtentExPointW(measure_, text.c_str() + pos, static_cast<int>(len - pos), std::max(width, 1), &fit,
@@ -284,7 +300,7 @@ void Renderer::Layout(const Newsletter& doc) {
 
     AddMasthead(doc);
     if (!Trim(doc.greeting).empty()) AddGreeting(doc);
-    for (size_t i = 0; i < doc.articles.size(); ++i) AddArticle(doc, doc.articles[i], i == 0);
+    for (size_t i = 0; i < doc.articles.size(); ++i) AddArticle(doc, i, i == 0);
     if (doc.articles.empty()) {
         if (!AtTop()) y_ += 48;
         FlowText(FEmpty, kMutedColor, L"아직 기사가 없습니다. [기사 추가] 버튼으로 첫 기사를 써 보세요.", kMarginLeft,
@@ -396,12 +412,27 @@ void Renderer::AddGreeting(const Newsletter& doc) {
     InsertBackground(startPage, startIndex, startY, kMarginLeft, kMarginRight, ToColorRef(theme.light));
 }
 
-void Renderer::AddArticle(const Newsletter& doc, const Article& article, bool first) {
+void Renderer::AddArticle(const Newsletter& doc, size_t index, bool first) {
+    const Article& article = doc.articles[index];
     const Theme& theme = GetTheme(doc.theme);
     const std::wstring category = Trim(article.category);
     const int lh = LineHeight(FBody, 1.55);
-    const int titleH = LineHeight(FHeading, 1.25);
+
+    // 기사 제목 서식: 기사에 정한 글꼴·크기·굵기가 없으면 문서의 제목 글꼴·크기를 씁니다.
+    const double unitsPerHalfPoint = kPageWidth / 595.28 / 2;
+    const double titleUnits = article.titleSize ? std::clamp(article.titleSize, kMinFontSize, kMaxFontSize) *
+                                                      unitsPerHalfPoint
+                                                : headingUnits_;
+    const std::wstring titleFace = Trim(article.titleFont).empty() ? FontOrDefault(doc.headingFont) : Trim(article.titleFont);
+    const int titleFont = ExtraFont(titleFace, titleUnits, article.titleBold ? FW_BOLD : FW_NORMAL);
+    const int titleH = LineHeight(titleFont, 1.25);
     const int tagH = LineHeight(FTag, 1.0) + 6;
+    const UINT align = article.titleAlign == TitleAlign::Center  ? DT_CENTER
+                       : article.titleAlign == TitleAlign::Right ? DT_RIGHT
+                                                                 : DT_LEFT;
+
+    // 쪽 나누기: 이 기사를 새 쪽에서 시작
+    if (article.pageBreakBefore && !AtTop()) NewPage();
 
     // 머리(분류·제목·밑줄)가 본문 첫 줄과 같은 쪽에 오도록, 들어갈 자리가 없으면 다음 쪽에서 시작합니다.
     if (!AtTop()) y_ += first ? 30 : 36;
@@ -417,7 +448,9 @@ void Renderer::AddArticle(const Newsletter& doc, const Article& article, bool fi
             if (y_ + needed > kContentBottom) NewPage();
             s = FreeSpan(y_, y_ + tagH, kMarginLeft, kMarginRight, tagW);
         }
-        int x = s.empty() ? kMarginLeft : s.left;
+        if (s.empty()) s = {kMarginLeft, kMarginRight};
+        // 꼬리표도 제목 정렬을 따릅니다.
+        int x = align == DT_CENTER ? (s.left + s.right - tagW) / 2 : align == DT_RIGHT ? s.right - tagW : s.left;
         COLORREF tagColor = ToColorRef(CategoryColor(category, doc.theme));
         Add({Item::RoundFill, RECT{x, y_, x + tagW, y_ + tagH}, tagColor, 0, L"", 0});
         Add({Item::Text, RECT{x, y_, x + tagW, y_ + tagH}, RGB(255, 255, 255), FTag, category, DT_CENTER | DT_VCENTER});
@@ -430,7 +463,7 @@ void Renderer::AddArticle(const Newsletter& doc, const Article& article, bool fi
         title = L"(제목 없음)";
         titleColor = kMutedColor;
     }
-    FlowText(FHeading, titleColor, title, kMarginLeft, kMarginRight, titleH);
+    FlowText(titleFont, titleColor, title, kMarginLeft, kMarginRight, titleH, align);
 
     y_ += 6;
     Span rule = FreeSpan(y_, y_ + 2, kMarginLeft, kMarginRight, 40);
@@ -448,6 +481,12 @@ void Renderer::AddArticle(const Newsletter& doc, const Article& article, bool fi
             lastWasBullet = false;
             continue;
         }
+        if (line.kind == BodyLine::PageBreak) {  // [쪽 나누기]
+            if (!AtTop()) NewPage();
+            pending = 0;
+            lastWasBullet = false;
+            continue;
+        }
         bool bullet = line.kind == BodyLine::Bullet;
         if (bullet && !lastWasBullet) pending += 2;
         if (!AtTop()) y_ += pending;
@@ -456,6 +495,117 @@ void Renderer::AddArticle(const Newsletter& doc, const Article& article, bool fi
         else FlowText(FBody, kTextColor, line.text, kMarginLeft, kMarginRight, lh);
         lastWasBullet = bullet;
     }
+
+    AddBooks(doc, index);
+}
+
+bool Renderer::Blocked(int top, int bottom, int left, int right) const {
+    if (page_ >= static_cast<int>(obstacles_.size())) return false;
+    for (const RECT& r : obstacles_[page_]) {
+        if (r.top < bottom && r.bottom > top && r.left < right && r.right > left) return true;
+    }
+    return false;
+}
+
+int Renderer::BuildBookCard(const Newsletter& doc, size_t articleIndex, size_t bookIndex, int x, int y, int width,
+                            int minHeight, std::vector<Item>* out) const {
+    const Article& article = doc.articles[articleIndex];
+    const Book& book = article.books[bookIndex];
+    const Theme& theme = GetTheme(doc.theme);
+    const bool twoColumns = article.bookColumns == 2;
+    const int pad = 12;
+    std::vector<Item> items;
+
+    // 표지(있으면 왼쪽)
+    int textLeft = x + pad;
+    int coverBottom = y;
+    if (!book.cover.empty() && book.coverWidth > 0 && book.coverHeight > 0) {
+        int coverW = twoColumns ? 64 : 84;
+        int coverH = std::clamp(coverW * book.coverHeight / book.coverWidth, coverW * 3 / 5, coverW * 2);
+        items.push_back({Item::Cover, RECT{x + pad, y + pad, x + pad + coverW, y + pad + coverH}, 0, 0, L"", 0,
+                         static_cast<int>(articleIndex), static_cast<int>(bookIndex)});
+        textLeft += coverW + 14;
+        coverBottom = y + pad + coverH;
+    }
+    const int textRight = x + width - pad;
+    const int textWidth = std::max(40, textRight - textLeft);
+    int ty = y + pad;
+
+    auto lines = [&](int font, COLORREF color, const std::wstring& text, double spacing) {
+        const int lh = LineHeight(font, spacing);
+        for (const auto& para : SplitParagraphs(text)) {
+            size_t pos = 0;
+            do {
+                while (pos < para.size() && para[pos] == L' ') ++pos;
+                size_t next = para.size();
+                std::wstring line = pos < para.size() ? TakeLine(font, para, pos, textWidth, &next) : L"";
+                items.push_back({Item::Text, RECT{textLeft, ty, textRight, ty + lh}, color, font, line, DT_LEFT});
+                ty += lh;
+                pos = next;
+            } while (pos < para.size());
+        }
+    };
+
+    std::wstring title = Trim(book.title);
+    lines(FBookTitle, title.empty() ? kMutedColor : kHeadingColor, title.empty() ? L"(서명 없음)" : L"『" + title + L"』",
+          1.3);
+    std::wstring meta;
+    for (const std::wstring* part : {&book.author, &book.publisher, &book.year}) {
+        if (Trim(*part).empty()) continue;
+        if (!meta.empty()) meta += L" · ";
+        meta += Trim(*part);
+    }
+    if (!meta.empty()) lines(FMeta, kMutedColor, meta, 1.4);
+    if (!Trim(book.callNumber).empty())
+        lines(FMeta, ToColorRef(theme.primary), L"청구기호 " + Trim(book.callNumber), 1.4);
+    if (!Trim(book.description).empty()) {
+        ty += 4;
+        lines(twoColumns ? FMeta : FBody, kTextColor, book.description, 1.45);
+    }
+
+    int height = std::max({ty, coverBottom, y}) + pad - y;
+    height = std::max(height, minHeight);
+    if (out) {
+        // 카드 바탕(옅은 테마색)을 먼저, 그 위에 표지·글자
+        out->push_back({Item::RoundFill, RECT{x, y, x + width, y + height}, ToColorRef(theme.light), 0, L"", 0});
+        out->insert(out->end(), items.begin(), items.end());
+    }
+    return height;
+}
+
+// 도서 카드를 1열 또는 2열로 놓습니다. 카드(2열이면 한 줄의 두 카드)는 쪽 사이에서 나뉘지 않고,
+// 글 피해 가기 그림과 겹치면 그 아래로 내려갑니다.
+void Renderer::AddBooks(const Newsletter& doc, size_t articleIndex) {
+    const Article& article = doc.articles[articleIndex];
+    if (article.books.empty()) return;
+    const int columns = article.bookColumns == 2 ? 2 : 1;
+    const int gap = 12;
+    const int columnWidth = columns == 2 ? (kContentWidth - gap) / 2 : kContentWidth;
+
+    if (!AtTop()) y_ += 14;
+    for (size_t first = 0; first < article.books.size(); first += columns) {
+        size_t count = std::min<size_t>(columns, article.books.size() - first);
+        int rowHeight = 0;
+        for (size_t c = 0; c < count; ++c)
+            rowHeight = std::max(rowHeight, BuildBookCard(doc, articleIndex, first + c, 0, 0, columnWidth, 0, nullptr));
+
+        for (int guard = 0; guard < 200; ++guard) {
+            if (y_ + rowHeight > kContentBottom && !AtTop()) {
+                NewPage();
+                continue;
+            }
+            if (!Blocked(y_, y_ + rowHeight, kMarginLeft, kMarginRight)) break;
+            int next = NextFreeY(y_, y_ + rowHeight, kMarginLeft, kMarginRight);
+            if (next + rowHeight > kContentBottom) NewPage();
+            else y_ = next;
+        }
+        for (size_t c = 0; c < count; ++c) {
+            int x = kMarginLeft + static_cast<int>(c) * (columnWidth + gap);
+            BuildBookCard(doc, articleIndex, first + c, x, y_, columnWidth, rowHeight, &pages_[page_]);
+        }
+        y_ += rowHeight + gap;
+    }
+    y_ -= gap;
 }
 
 void Renderer::AddPublisher(const Newsletter& doc) {
@@ -490,13 +640,21 @@ void Renderer::DrawPage(HDC hdc, int page, const Newsletter& doc, ImageLibrary* 
     FillRect(hdc, &pageRect, white);
     DeleteObject(white);
 
-    auto draw = [hdc, this](const Item& item) {
+    auto draw = [&](const Item& item) {
         RECT rc = item.rc;
         switch (item.type) {
             case Item::Fill: {
                 HBRUSH b = CreateSolidBrush(item.color);
                 FillRect(hdc, &rc, b);
                 DeleteObject(b);
+                break;
+            }
+            case Item::Cover: {
+                if (!images || item.article < 0 || item.article >= static_cast<int>(doc.articles.size())) break;
+                const auto& books = doc.articles[item.article].books;
+                if (item.book < 0 || item.book >= static_cast<int>(books.size())) break;
+                const Book& b = books[item.book];
+                if (!b.cover.empty()) images->Draw(hdc, b.coverId, b.cover, rc, forPrint);
                 break;
             }
             case Item::Dot: {
@@ -520,7 +678,7 @@ void Renderer::DrawPage(HDC hdc, int page, const Newsletter& doc, ImageLibrary* 
                 break;
             }
             case Item::Text: {
-                HGDIOBJ oldFont = SelectObject(hdc, fonts_[item.font]);
+                HGDIOBJ oldFont = SelectObject(hdc, Font(item.font));
                 SetTextColor(hdc, item.color);
                 DrawTextW(hdc, item.text.c_str(), static_cast<int>(item.text.size()), &rc,
                           item.format | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);

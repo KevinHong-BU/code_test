@@ -103,18 +103,18 @@ bool ImageLibrary::ProbeSize(const std::string& data, int* width, int* height) {
     return true;
 }
 
-ImageLibrary::Entry* ImageLibrary::Get(const nl::Picture& picture) {
-    auto it = cache_.find(picture.id);
-    if (it != cache_.end() && it->second->dataSize == picture.data.size()) return it->second.get();
+ImageLibrary::Entry* ImageLibrary::Get(int id, const std::string& data) {
+    auto it = cache_.find(id);
+    if (it != cache_.end() && it->second->dataSize == data.size()) return it->second.get();
     auto entry = std::make_unique<Entry>();
-    entry->Load(picture.data);
+    entry->Load(data);
     Entry* raw = entry.get();
-    cache_[picture.id] = std::move(entry);
+    cache_[id] = std::move(entry);
     return raw;
 }
 
-bool ImageLibrary::PixelSize(const nl::Picture& picture, int* width, int* height) {
-    Entry* entry = Get(picture);
+bool ImageLibrary::PixelSize(int id, const std::string& data, int* width, int* height) {
+    Entry* entry = Get(id, data);
     if (entry->failed) return false;
     *width = static_cast<int>(entry->full->GetWidth());
     *height = static_cast<int>(entry->full->GetHeight());
@@ -125,12 +125,15 @@ void ImageLibrary::Prune(const nl::Newsletter& doc) {
     for (auto it = cache_.begin(); it != cache_.end();) {
         bool used = std::any_of(doc.pictures.begin(), doc.pictures.end(),
                                 [&it](const nl::Picture& p) { return p.id == it->first; });
+        for (const nl::Article& a : doc.articles) {
+            for (const nl::Book& b : a.books) used = used || (!b.cover.empty() && b.coverId == it->first);
+        }
         it = used ? std::next(it) : cache_.erase(it);
     }
 }
 
-void ImageLibrary::Draw(HDC hdc, const nl::Picture& picture, const RECT& rect, bool forPrint) {
-    Entry* entry = Get(picture);
+void ImageLibrary::Draw(HDC hdc, int id, const std::string& data, const RECT& rect, bool forPrint) {
+    Entry* entry = Get(id, data);
     if (entry->failed) {
         // 읽을 수 없는 그림은 회색 상자에 X 표시로 자리만 보여 줍니다.
         HBRUSH gray = CreateSolidBrush(RGB(225, 225, 225));

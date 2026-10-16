@@ -7,13 +7,41 @@
 
 namespace nl {
 
+enum class TitleAlign { Left, Center, Right };
+
+// 신착 도서·추천 도서 기사에 싣는 책 한 권.
+struct Book {
+    std::wstring title;        // 서명
+    std::wstring author;       // 저자
+    std::wstring publisher;    // 출판사
+    std::wstring year;         // 발행연도
+    std::wstring callNumber;   // 청구기호(소장 위치)
+    std::wstring description;  // 소개
+    std::string cover;         // 표지 그림 파일 내용(없으면 빈 값)
+    int coverId = 0;           // 그림 캐시 키(문서 안에서 고유). 파일에 저장하지 않음.
+    int coverWidth = 0, coverHeight = 0;  // 표지 원본 픽셀 크기(가로세로 비율용)
+};
+
 // 소식지에 실리는 기사 하나.
 // body의 줄바꿈은 항상 '\n' 하나로 저장합니다(편집 컨트롤의 "\r\n"은 UI에서 변환).
 struct Article {
     std::wstring category;
     std::wstring title;
     std::wstring body;
+
+    // 기사 제목 서식. 비어 있거나 0이면 문서의 제목 글꼴·크기를 씁니다.
+    std::wstring titleFont;
+    int titleSize = 0;  // 반 포인트 단위
+    bool titleBold = true;
+    TitleAlign titleAlign = TitleAlign::Left;
+
+    bool pageBreakBefore = false;  // 이 기사를 새 쪽에서 시작
+    std::vector<Book> books;       // 본문 아래에 카드로 싣는 도서 목록
+    int bookColumns = 1;           // 도서 카드 배열: 1열 또는 2열
 };
+
+// 본문에서 이 글자만 있는 줄은 쪽 나누기입니다.
+extern const wchar_t kPageBreakMarker[];
 
 // 쪽 위에 자유롭게 놓는 그림(로고·사진).
 // 위치와 크기는 쪽 좌표(논리 단위, 한 쪽 = 800 x 1131)로 저장합니다.
@@ -28,8 +56,6 @@ struct Picture {
     bool wrapText = true;  // true면 본문 글자가 그림을 피해 배치됨
     int anchor = -1;       // HTML 내보내기용 기준 기사 번호(-1이면 맨 위). 파일에 저장하지 않음.
 };
-
-enum class TitleAlign { Left, Center, Right };
 
 // 반 포인트 단위 기본 크기와 허용 범위
 constexpr int kDefaultHeadingSize = 32;  // 16pt
@@ -58,7 +84,7 @@ struct Newsletter {
     std::vector<Article> articles;
     std::vector<Picture> pictures;  // 뒤에 있을수록 위에 그려짐
 
-    int NextPictureId() const;
+    int NextPictureId() const;  // 그림과 도서 표지를 통틀어 아직 쓰지 않은 번호
 };
 
 struct Color {
@@ -97,7 +123,7 @@ std::wstring TodayString();
 
 // 본문 한 줄의 종류. "- ", "* ", "• ", "· "로 시작하면 글머리표 항목입니다.
 struct BodyLine {
-    enum Kind { Text, Bullet, Blank } kind;
+    enum Kind { Text, Bullet, Blank, PageBreak } kind;
     std::wstring text;
 };
 std::vector<BodyLine> ParseBody(const std::wstring& body);

@@ -34,7 +34,19 @@ bool Equal(const nl::Newsletter& a, const nl::Newsletter& b) {
     for (size_t i = 0; i < a.articles.size(); ++i) {
         const auto& x = a.articles[i];
         const auto& y = b.articles[i];
-        if (x.category != y.category || x.title != y.title || x.body != y.body) return false;
+        if (x.category != y.category || x.title != y.title || x.body != y.body || x.titleFont != y.titleFont ||
+            x.titleSize != y.titleSize || x.titleBold != y.titleBold || x.titleAlign != y.titleAlign ||
+            x.pageBreakBefore != y.pageBreakBefore || x.bookColumns != y.bookColumns ||
+            x.books.size() != y.books.size())
+            return false;
+        for (size_t k = 0; k < x.books.size(); ++k) {
+            const auto& p = x.books[k];
+            const auto& q = y.books[k];
+            if (p.title != q.title || p.author != q.author || p.publisher != q.publisher || p.year != q.year ||
+                p.callNumber != q.callNumber || p.description != q.description || p.cover != q.cover ||
+                p.coverWidth != q.coverWidth || p.coverHeight != q.coverHeight)
+                return false;
+        }
     }
     if (a.pictures.size() != b.pictures.size()) return false;
     for (size_t i = 0; i < a.pictures.size(); ++i) {
@@ -237,6 +249,58 @@ void TestFontSizes() {
     CHECK(Contains(html, "text-align:right"));
 }
 
+void TestBooksAndPageBreaks() {
+    // 본문 안의 쪽 나누기 표시
+    auto lines = nl::ParseBody(L"앞\n[쪽 나누기]\n  [쪽나누기]  \n뒤 [쪽 나누기]");
+    CHECK(lines.size() == 4);
+    if (lines.size() == 4) {
+        CHECK(lines[1].kind == nl::BodyLine::PageBreak && lines[2].kind == nl::BodyLine::PageBreak);
+        CHECK(lines[3].kind == nl::BodyLine::Text);  // 다른 글자와 같은 줄이면 쪽 나누기가 아님
+    }
+
+    // 도서·기사 서식이 저장되고 다시 읽힘
+    nl::Newsletter doc = nl::CreateSample();
+    nl::Article& a = doc.articles[2];
+    CHECK(a.books.size() == 4 && a.bookColumns == 2);
+    a.titleFont = L"나눔명조";
+    a.titleSize = 44;
+    a.titleBold = false;
+    a.titleAlign = nl::TitleAlign::Center;
+    a.pageBreakBefore = true;
+    a.books[1].description = L"여러 줄\n소개 = \\ 특수문자";
+    a.books[1].cover = FakePng();
+    a.books[1].coverWidth = 300;
+    a.books[1].coverHeight = 440;
+    a.books[1].coverId = doc.NextPictureId();
+    CHECK(doc.NextPictureId() == a.books[1].coverId + 1);  // 표지 번호도 고려
+
+    std::string data = nl::Serialize(doc);
+    nl::Newsletter loaded;
+    std::wstring error;
+    CHECK(nl::Deserialize(data, loaded, error));
+    CHECK(Equal(doc, loaded));
+    CHECK(loaded.articles[2].books[1].coverId > 0);
+
+    // 도서가 기사 밖에 있으면 오류, 크기 정보 없는 표지는 버림
+    CHECK(!nl::Deserialize("[newsletter]\nformat=2\n[book]\ntitle=x\n", loaded, error));
+    CHECK(nl::Deserialize("[newsletter]\nformat=2\n[article]\ntitle=A\n[book]\ntitle=B\ncover=Zm9v\n", loaded, error));
+    CHECK(loaded.articles.size() == 1 && loaded.articles[0].books.size() == 1);
+    CHECK(loaded.articles[0].books[0].cover.empty());
+
+    // HTML: 2열 도서 카드, 표지, 기사 제목 서식, 쪽 나누기
+    a.body = L"첫 문단\n[쪽 나누기]\n둘째 문단";
+    std::string html = nl::ExportHtml(doc);
+    CHECK(Contains(html, "<div class=\"books cols-2\">"));
+    CHECK(Contains(html, "class=\"cover\" alt=\"\" src=\"data:image/png;base64,"));
+    CHECK(Contains(html, nl::ToUtf8(L"<div class=\"book-call\">청구기호 440-이44ㅊ</div>")));
+    CHECK(Contains(html, nl::ToUtf8(L"여러 줄<br>\n소개 = \\ 특수문자")));
+    CHECK(Contains(html, "<section class=\"article new-page\">"));
+    CHECK(Contains(html, "<div class=\"page-break\"></div>"));
+    CHECK(Contains(html, "<div style=\"text-align:center\">"));
+    CHECK(Contains(html, nl::ToUtf8(L"<h2 style=\"font-family:'나눔명조'")));
+    CHECK(Contains(html, "font-size:28.9px;font-weight:normal;"));  // 21 * 44/32 = 28.875
+}
+
 void TestHtmlPictures() {
     nl::Newsletter doc = nl::CreateBlank();
     doc.articles = {{L"공지사항", L"첫 기사", L"본문"}, {L"기타", L"둘째 기사", L"본문"}};
@@ -392,6 +456,7 @@ int main() {
     TestHtmlPictures();
     TestFonts();
     TestFontSizes();
+    TestBooksAndPageBreaks();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

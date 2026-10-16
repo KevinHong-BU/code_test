@@ -30,6 +30,9 @@
     <ClCompile Include="src\ImageLibrary.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
+    <ClCompile Include="src\BookDialog.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
     <ClCompile Include="src\Newsletter.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
@@ -48,6 +51,9 @@
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="src\ImageLibrary.h">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="src\BookDialog.h">
       <Filter>헤더 파일</Filter>
     </ClInclude>
     <ClInclude Include="src\Newsletter.h">

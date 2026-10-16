@@ -60,13 +60,28 @@ private:
     void OnInfoChanged(int id);
     void OnArticleChanged(int id, int code);
 
+    // 기사 편집 탭
+    void ShowArticleTab(int tab);
+    void UpdateTabLabels();
+    void LoadArticleFormat();
+    void OnArticleFormatChanged(int id, int code);
+    void InsertPageBreak();
+    // 도서 목록
+    void RefreshBookList(int select);
+    void UpdateBookButtons();
+    void AddBook();
+    void EditBook();
+    void DeleteBook();
+    void MoveBook(int delta);
+    void ArticleChanged();  // 기사 내용이 바뀐 뒤: 수정 표시 + 미리보기 갱신
+
     // 기사 편집
     void AddArticle(bool duplicate);
     void DeleteArticle();
     void MoveArticle(int delta);
 
     // 그림
-    bool LoadPictureFile(const wchar_t* title, nl::Picture* picture);
+    bool LoadPictureFile(HWND owner, const wchar_t* title, nl::Picture* picture);
     void InsertLogo();
     void InsertPhoto();
     void ReplacePicture();
@@ -121,6 +136,15 @@ private:
     HWND headingSizeLabel_ = nullptr, headingSize_ = nullptr, bodySizeLabel_ = nullptr, bodySize_ = nullptr;
     HWND titleLayoutLabel_ = nullptr, titleAlign_ = nullptr, titleSizeLabel_ = nullptr, titleSize_ = nullptr;
     HWND titleReset_ = nullptr;
+    // 기사 편집 탭과 각 쪽의 컨트롤
+    HWND articleTabs_ = nullptr, pageBreakButton_ = nullptr;
+    HWND bookList_ = nullptr, bookAdd_ = nullptr, bookEdit_ = nullptr, bookDelete_ = nullptr, bookUp_ = nullptr,
+         bookDown_ = nullptr, bookColsLabel_ = nullptr, bookCols1_ = nullptr, bookCols2_ = nullptr, bookHint_ = nullptr;
+    HWND artTitleFontLabel_ = nullptr, artTitleFont_ = nullptr, artTitleSizeLabel_ = nullptr, artTitleSize_ = nullptr,
+         artTitleBold_ = nullptr, artTitleAlignLabel_ = nullptr, artTitleAlign_ = nullptr, artPageBreak_ = nullptr,
+         formatHint_ = nullptr;
+    std::vector<HWND> tabPages_[3];
+    int articleTab_ = 0;
     HWND status_ = nullptr;
 
     struct FontInfo {

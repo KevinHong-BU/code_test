@@ -37,6 +37,10 @@ std::wstring BodyHtml(const std::wstring& body) {
             case BodyLine::Blank:
                 close();
                 break;
+            case BodyLine::PageBreak:
+                close();
+                out += L"<div class=\"page-break\"></div>\n";
+                break;
             case BodyLine::Bullet:
                 if (state != List) {
                     close();
@@ -99,6 +103,43 @@ std::wstring FontStack(const std::wstring& face) {
     return L"'" + name + L"','Malgun Gothic','맑은 고딕','Apple SD Gothic Neo',sans-serif";
 }
 
+// 도서 카드 묶음(1열 또는 2열)
+std::wstring BooksHtml(const Article& a) {
+    if (a.books.empty()) return L"";
+    std::wstring out = a.bookColumns == 2 ? L"<div class=\"books cols-2\">\n" : L"<div class=\"books\">\n";
+    for (const Book& b : a.books) {
+        out += L"<div class=\"book\">";
+        std::string mime = ImageMimeType(b.cover);
+        if (!b.cover.empty() && !mime.empty())
+            out += L"<img class=\"cover\" alt=\"\" src=\"data:" + FromUtf8(mime) + L";base64," +
+                   FromUtf8(Base64Encode(b.cover)) + L"\">";
+        out += L"<div class=\"info\">";
+        std::wstring title = Trim(b.title);
+        out += L"<div class=\"book-title\">" + (title.empty() ? L"" : L"『" + HtmlEscape(title) + L"』") + L"</div>";
+        std::wstring meta;
+        for (const std::wstring* part : {&b.author, &b.publisher, &b.year}) {
+            if (Trim(*part).empty()) continue;
+            if (!meta.empty()) meta += L" · ";
+            meta += HtmlEscape(Trim(*part));
+        }
+        if (!meta.empty()) out += L"<div class=\"book-meta\">" + meta + L"</div>";
+        if (!Trim(b.callNumber).empty())
+            out += L"<div class=\"book-call\">청구기호 " + HtmlEscape(Trim(b.callNumber)) + L"</div>";
+        if (!Trim(b.description).empty()) out += L"<div class=\"book-desc\">" + MultiLine(b.description) + L"</div>";
+        out += L"</div></div>\n";
+    }
+    return out + L"</div>\n";
+}
+
+// 기사에서 따로 정한 제목 서식(글꼴·크기·굵기)을 style 속성으로 만듭니다.
+std::wstring TitleStyle(const Article& a) {
+    std::wstring style;
+    if (!Trim(a.titleFont).empty()) style += L"font-family:" + FontStack(a.titleFont) + L";";
+    if (a.titleSize) style += L"font-size:" + Px(21, a.titleSize, kDefaultHeadingSize) + L";";
+    if (!a.titleBold) style += L"font-weight:normal;";
+    return style.empty() ? L"" : L" style=\"" + style + L"\"";
+}
+
 }  // namespace
 
 std::wstring HtmlEscape(const std::wstring& s) {
@@ -158,8 +199,22 @@ std::string ExportHtml(const Newsletter& doc) {
     h += L".footer{margin-top:40px;padding-top:12px;border-top:1px solid #ccc;color:#666;font-size:" +
          Px(13, doc.bodySize, kDefaultBodySize) + L";"
          L"text-align:center}\n";
+    h += L".books{display:grid;grid-template-columns:1fr;gap:12px;margin:14px 0}\n"
+         L".books.cols-2{grid-template-columns:1fr 1fr}\n"
+         L"@media (max-width:560px){.books.cols-2{grid-template-columns:1fr}}\n"
+         L".book{display:flex;gap:14px;background:" + Css(theme.light) + L";border-radius:8px;padding:12px}\n"
+         L".book .cover{width:84px;height:auto;align-self:flex-start;border-radius:2px}\n"
+         L".books.cols-2 .cover{width:64px}\n"
+         L".book-title{font-weight:bold;color:#191919}\n"
+         L".book-meta{color:#6e6e6e;font-size:.9em}\n"
+         L".book-call{color:" + Css(theme.primary) + L";font-size:.9em}\n"
+         L".book-desc{margin-top:4px}\n.books.cols-2 .book-desc{font-size:.9em}\n";
+    // 쪽 나누기: 화면에서는 점선, 인쇄할 때는 새 쪽
+    h += L".page-break{border-top:1px dashed #bbb;margin:28px 0}\n";
     h += L"@media print{body{background:#fff}.paper{box-shadow:none;margin:0;max-width:none}"
-         L".masthead,.tag,.greeting{-webkit-print-color-adjust:exact;print-color-adjust:exact}}\n";
+         L".page-break{border:0;margin:0;break-after:page;page-break-after:always}"
+         L".article.new-page{break-before:page;page-break-before:always}.book{break-inside:avoid}"
+         L".masthead,.tag,.greeting,.book{-webkit-print-color-adjust:exact;print-color-adjust:exact}}\n";
     h += L"</style>\n</head>\n<body>\n<div class=\"paper\">\n";
 
     h += L"<header class=\"masthead\">\n";
@@ -195,14 +250,20 @@ std::string ExportHtml(const Newsletter& doc) {
 
     for (size_t i = 0; i < doc.articles.size(); ++i) {
         const Article& a = doc.articles[i];
-        h += L"<section class=\"article\">\n";
+        h += a.pageBreakBefore ? L"<section class=\"article new-page\">\n" : L"<section class=\"article\">\n";
+        const bool aligned = a.titleAlign != TitleAlign::Left;
+        if (aligned)
+            h += std::wstring(L"<div style=\"text-align:") + (a.titleAlign == TitleAlign::Center ? L"center" : L"right") +
+                 L"\">\n";
         if (!Trim(a.category).empty()) {
             h += L"<span class=\"tag\" style=\"background:" + Css(CategoryColor(Trim(a.category), doc.theme)) +
                  L"\">" + HtmlEscape(Trim(a.category)) + L"</span>\n";
         }
-        h += L"<h2>" + HtmlEscape(Trim(a.title)) + L"</h2>\n";
+        h += L"<h2" + TitleStyle(a) + L">" + HtmlEscape(Trim(a.title)) + L"</h2>\n";
+        if (aligned) h += L"</div>\n";
         h += photosFor(static_cast<int>(i));
         h += BodyHtml(a.body);
+        h += BooksHtml(a);
         h += L"</section>\n";
     }
 

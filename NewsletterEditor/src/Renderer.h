@@ -8,7 +8,9 @@
 
 #include <windows.h>
 
+#include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "Newsletter.h"
@@ -49,15 +51,16 @@ public:
     int TitleOffsetY() const { return titleOffsetY_; }
 
 private:
-    enum FontId { FLibrary, FTitle, FMeta, FGreeting, FTag, FHeading, FBody, FFooter, FEmpty, FontCount };
+    enum FontId { FLibrary, FTitle, FMeta, FGreeting, FTag, FHeading, FBody, FFooter, FEmpty, FBookTitle, FontCount };
 
     struct Item {
-        enum Type { Fill, RoundFill, Dot, Text } type;
+        enum Type { Fill, RoundFill, Dot, Text, Cover } type;
         RECT rc;  // 쪽 좌표
         COLORREF color;
         int font;
         std::wstring text;
         UINT format;
+        int article = -1, book = -1;  // Cover: 어느 기사의 몇 번째 도서 표지인지
     };
     struct Span {
         int left, right;
@@ -68,6 +71,9 @@ private:
     };
 
     void EnsureFonts(const Newsletter& doc);
+    HFONT Font(int id) const { return id < FontCount ? fonts_[id] : extraFonts_[id - FontCount]; }
+    // 기사마다 다른 제목 서식용 글꼴. 같은 글꼴·크기·굵기는 한 번만 만듭니다.
+    int ExtraFont(const std::wstring& face, double height, int weight);
     int LineHeight(int font, double spacing) const;
     int TextWidth(int font, const std::wstring& s) const;
     // text[pos..]에서 width 안에 들어가는 한 줄을 잘라 냅니다. 다음 줄 시작 위치를 next에 돌려줍니다.
@@ -90,7 +96,12 @@ private:
 
     void AddMasthead(const Newsletter& doc);
     void AddGreeting(const Newsletter& doc);
-    void AddArticle(const Newsletter& doc, const Article& article, bool first);
+    void AddArticle(const Newsletter& doc, size_t index, bool first);
+    void AddBooks(const Newsletter& doc, size_t articleIndex);
+    // 도서 카드 하나를 (x, y)에 배치합니다. out이 없으면 높이만 잽니다. 카드는 최소 minHeight 높이.
+    int BuildBookCard(const Newsletter& doc, size_t articleIndex, size_t bookIndex, int x, int y, int width,
+                      int minHeight, std::vector<Item>* out) const;
+    bool Blocked(int top, int bottom, int left, int right) const;
     void AddPublisher(const Newsletter& doc);
 
     struct FontKey {
@@ -103,6 +114,9 @@ private:
     };
     HFONT fonts_[FontCount];
     FontKey fontKey_;
+    std::vector<HFONT> extraFonts_;
+    std::map<std::tuple<std::wstring, int, int>, int> extraFontIndex_;
+    double headingUnits_ = 22;  // 문서 기본 기사 제목 크기(논리 단위)
     double bodyUnits_ = 15;  // 본문 글자 크기(논리 단위)
     RECT titleRect_{};       // 1쪽 제호 글자들이 차지하는 영역
     int titleOffsetX_ = 0, titleOffsetY_ = 0;

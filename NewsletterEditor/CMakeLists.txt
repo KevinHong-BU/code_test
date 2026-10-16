@@ -24,6 +24,7 @@ if(WIN32)
         src/PreviewWindow.cpp
         src/Renderer.cpp
         src/ImageLibrary.cpp
+        src/BookDialog.cpp
         res/NewsletterEditor.rc)
     if(MSVC)
         # MSVC 링커가 매니페스트를 넣습니다(.rc에서는 MinGW일 때만 넣음).
