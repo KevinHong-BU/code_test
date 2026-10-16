@@ -1,5 +1,9 @@
 # 내 스케줄 (MySchedule)
 
+> 이 저장소에는 두 개의 프로젝트가 있습니다.
+> - 루트: 안드로이드 일정 관리 앱 (아래 설명)
+> - [`NewsletterEditor/`](NewsletterEditor/README.md): Visual C++(Win32)로 만든 **도서관 소식지(뉴스레터) 편집기**
+
 개인 일정 관리를 위한 안드로이드 앱입니다. Kotlin + Jetpack Compose(Material 3) + Room으로 만들었습니다.
 
 ## 기능

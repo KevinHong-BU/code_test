@@ -1,0 +1,38 @@
+// 리소스: 아이콘, 버전 정보, (MinGW 빌드 시) 매니페스트.
+// 메뉴와 단축키는 한글 문자열 인코딩 문제를 피하려고 코드(MainWindow.cpp)에서 만듭니다.
+#include <windows.h>
+#include "../src/resource.h"
+
+IDI_APP ICON "app.ico"
+
+// Visual Studio(MSBuild/CMake)는 링커가 매니페스트를 넣으므로 MinGW(windres)에서만 포함합니다.
+#ifdef __GNUC__
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "NewsletterEditor.manifest"
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204b0"
+        BEGIN
+            VALUE "FileDescription", "Library Newsletter Editor"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "NewsletterEditor"
+            VALUE "OriginalFilename", "NewsletterEditor.exe"
+            VALUE "ProductName", "Library Newsletter Editor"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x412, 1200
+    END
+END

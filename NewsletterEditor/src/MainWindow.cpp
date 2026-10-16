@@ -1,0 +1,1776 @@
+﻿#include "MainWindow.h"
+
+#include <commctrl.h>
+#include <commdlg.h>
+#include <shellapi.h>
+
+#include <algorithm>
+#include <cmath>
+
+#include "BackgroundDialog.h"
+#include "BookDialog.h"
+#include "HtmlExport.h"
+#include "Renderer.h"
+#include "resource.h"
+
+namespace {
+
+const wchar_t kClassName[] = L"LibraryNewsletterEditor";
+const wchar_t kAppName[] = L"도서관 소식지 편집기";
+const wchar_t kFileFilter[] = L"도서관 소식지 (*.lnews)\0*.lnews\0모든 파일 (*.*)\0*.*\0";
+const wchar_t kHtmlFilter[] = L"HTML 문서 (*.html)\0*.html;*.htm\0모든 파일 (*.*)\0*.*\0";
+const wchar_t kImageFilter[] =
+    L"그림 파일 (*.png;*.jpg;*.jpeg;*.gif;*.bmp)\0*.png;*.jpg;*.jpeg;*.gif;*.bmp\0모든 파일 (*.*)\0*.*\0";
+const size_t kMaxPictureBytes = 20 * 1024 * 1024;
+
+std::wstring GetText(HWND control) {
+    int len = GetWindowTextLengthW(control);
+    std::wstring s(static_cast<size_t>(len) + 1, L'\0');
+    GetWindowTextW(control, &s[0], len + 1);
+    s.resize(static_cast<size_t>(len));
+    return s;
+}
+
+bool ReadFileBytes(const std::wstring& path, std::string& out) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size{};
+    bool ok = GetFileSizeEx(file, &size) && size.QuadPart < 64 * 1024 * 1024;
+    if (ok) {
+        out.resize(static_cast<size_t>(size.QuadPart));
+        DWORD read = 0;
+        ok = out.empty() || (ReadFile(file, &out[0], static_cast<DWORD>(out.size()), &read, nullptr) &&
+                             read == out.size());
+    }
+    DWORD error = ok ? 0 : GetLastError();
+    CloseHandle(file);
+    if (!ok) SetLastError(error ? error : ERROR_FILE_TOO_LARGE);
+    return ok;
+}
+
+// 임시 파일에 먼저 쓴 뒤 바꿔치기해서, 저장 도중 실패해도 원래 파일이 망가지지 않게 합니다.
+bool WriteFileBytes(const std::wstring& path, const std::string& data) {
+    std::wstring temp = path + L".tmp";
+    HANDLE file = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    bool ok = WriteFile(file, data.data(), static_cast<DWORD>(data.size()), &written, nullptr) &&
+              written == data.size();
+    ok = CloseHandle(file) && ok;
+    if (ok) ok = MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    if (!ok) {
+        DWORD error = GetLastError();
+        DeleteFileW(temp.c_str());
+        SetLastError(error);
+    }
+    return ok;
+}
+
+// 마지막 Windows 오류를 사람이 읽을 수 있는 문장으로 바꿉니다.
+std::wstring LastErrorText() {
+    DWORD code = GetLastError();
+    wchar_t* buffer = nullptr;
+    DWORD len = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                               nullptr, code, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+    std::wstring text = len ? nl::Trim(std::wstring(buffer, len)) : L"";
+    if (buffer) LocalFree(buffer);
+    return text + L" (오류 " + std::to_wstring(code) + L")";
+}
+
+std::wstring FileNameOf(const std::wstring& path) {
+    size_t slash = path.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
+// 파일 이름에 쓸 수 없는 문자를 바꿉니다.
+std::wstring SanitizeFileName(std::wstring name) {
+    for (wchar_t& c : name) {
+        if (wcschr(L"\\/:*?\"<>|", c) || c < 32) c = L'_';
+    }
+    name = nl::Trim(name);
+    return name.empty() ? L"소식지" : name;
+}
+
+std::wstring ListItemText(const nl::Article& a) {
+    std::wstring title = nl::Trim(a.title).empty() ? L"(제목 없음)" : nl::Trim(a.title);
+    std::wstring category = nl::Trim(a.category);
+    return category.empty() ? title : L"[" + category + L"] " + title;
+}
+
+}  // namespace
+
+MainWindow::MainWindow(HINSTANCE instance) : instance_(instance) {}
+
+MainWindow::~MainWindow() {
+    for (auto& entry : previewFonts_) DeleteObject(entry.second);
+    if (uiFont_) DeleteObject(uiFont_);
+    if (accel_) DestroyAcceleratorTable(accel_);
+}
+
+bool MainWindow::PreTranslateMessage(MSG* msg) {
+    // 휠 메시지는 포커스를 가진 컨트롤로 가므로, 마우스가 미리보기 위에 있으면 미리보기로 보냅니다.
+    if (msg->message == WM_MOUSEWHEEL) {
+        POINT pt{static_cast<short>(LOWORD(msg->lParam)), static_cast<short>(HIWORD(msg->lParam))};
+        if (WindowFromPoint(pt) == preview_.hwnd()) msg->hwnd = preview_.hwnd();
+    }
+    if (TranslateAcceleratorW(hwnd_, accel_, msg)) return true;
+    return IsDialogMessageW(hwnd_, msg) != 0;
+}
+
+bool MainWindow::Create(int showCommand) {
+    if (!PreviewWindow::Register(instance_)) return false;
+
+    WNDCLASSEXW wc{sizeof(wc)};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = instance_;
+    wc.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APP));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
+                                               GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    wc.lpszClassName = kClassName;
+    if (!RegisterClassExW(&wc)) return false;
+
+    HDC screen = GetDC(nullptr);
+    dpi_ = GetDeviceCaps(screen, LOGPIXELSY);
+    ReleaseDC(nullptr, screen);
+
+    ACCEL keys[] = {
+        {FCONTROL | FVIRTKEY, 'N', IDM_NEW},
+        {FCONTROL | FVIRTKEY, 'O', IDM_OPEN},
+        {FCONTROL | FVIRTKEY, 'S', IDM_SAVE},
+        {FCONTROL | FSHIFT | FVIRTKEY, 'S', IDM_SAVE_AS},
+        {FCONTROL | FVIRTKEY, 'E', IDM_EXPORT_HTML},
+        {FCONTROL | FVIRTKEY, 'P', IDM_PRINT},
+        {FCONTROL | FSHIFT | FVIRTKEY, 'N', IDM_ADD_ARTICLE},
+        {FCONTROL | FSHIFT | FVIRTKEY, 'D', IDM_DUPLICATE_ARTICLE},
+        {FCONTROL | FSHIFT | FVIRTKEY, VK_UP, IDM_MOVE_UP},
+        {FCONTROL | FSHIFT | FVIRTKEY, VK_DOWN, IDM_MOVE_DOWN},
+        {FCONTROL | FVIRTKEY, VK_OEM_PLUS, IDM_ZOOM_IN},
+        {FCONTROL | FVIRTKEY, VK_ADD, IDM_ZOOM_IN},
+        {FCONTROL | FVIRTKEY, VK_OEM_MINUS, IDM_ZOOM_OUT},
+        {FCONTROL | FVIRTKEY, VK_SUBTRACT, IDM_ZOOM_OUT},
+        {FCONTROL | FVIRTKEY, '0', IDM_ZOOM_FIT},
+        {FCONTROL | FVIRTKEY, VK_RETURN, IDM_INSERT_PAGE_BREAK},
+    };
+    accel_ = CreateAcceleratorTableW(keys, static_cast<int>(sizeof(keys) / sizeof(keys[0])));
+
+    // WS_CLIPCHILDREN은 쓰지 않습니다. 그룹 상자는 안쪽을 지우지 않아서, 부모가 그 영역을 건너뛰면 배경이 깨집니다.
+    // 기본 크기는 작업 영역(작업 표시줄 제외)을 넘지 않게 합니다.
+    RECT work{0, 0, S(1280), S(940)};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    const int width = std::min(S(1280), static_cast<int>(work.right - work.left));
+    const int height = std::min(S(940), static_cast<int>(work.bottom - work.top));
+    hwnd_ = CreateWindowExW(WS_EX_CONTROLPARENT | WS_EX_ACCEPTFILES, kClassName, kAppName,
+                            WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, width, height,
+                            nullptr, nullptr, instance_, this);
+    if (!hwnd_) return false;
+    ShowWindow(hwnd_, showCommand);
+    UpdateWindow(hwnd_);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// 화면 구성
+
+HWND MainWindow::AddLabel(const wchar_t* text, DWORD extraStyle) {
+    HWND h = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE | extraStyle, 0, 0, 0,
+                             0, hwnd_,
+                             nullptr, instance_, nullptr);
+    SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    return h;
+}
+
+HWND MainWindow::AddEdit(int id, bool multiline) {
+    DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
+    style |= multiline ? (ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL) : ES_AUTOHSCROLL;
+    HWND h = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", style, 0, 0, 0, 0, hwnd_,
+                             reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_, nullptr);
+    SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    SendMessageW(h, EM_SETLIMITTEXT, 1000000, 0);
+    return h;
+}
+
+HWND MainWindow::AddButton(int id, const wchar_t* text) {
+    HWND h = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd_,
+                             reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_, nullptr);
+    SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    return h;
+}
+
+void MainWindow::CreateControls() {
+    uiFont_ = CreateFontW(-MulDiv(10, dpi_, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                          L"맑은 고딕");
+
+    // 생성 순서가 Tab 키 이동 순서입니다.
+    libraryLabel_ = AddLabel(L"도서관명");
+    library_ = AddEdit(IDC_LIBRARY, false);
+    issueLabel_ = AddLabel(L"호수");
+    issue_ = AddEdit(IDC_ISSUE, false);
+    titleLabel_ = AddLabel(L"제목");
+    title_ = AddEdit(IDC_TITLE, false);
+    dateLabel_ = AddLabel(L"발행일");
+    date_ = AddEdit(IDC_DATE, false);
+    today_ = AddButton(IDC_TODAY, L"오늘");
+    themeLabel_ = AddLabel(L"테마");
+    theme_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
+                             0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_THEME)), instance_, nullptr);
+    SendMessageW(theme_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (int i = 0; i < nl::ThemeCount(); ++i)
+        SendMessageW(theme_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(nl::GetTheme(i).name));
+    LoadSystemFonts();
+    headingFontLabel_ = AddLabel(L"제목 글꼴");
+    headingFont_ = AddFontCombo(IDC_HEADING_FONT);
+    headingSizeLabel_ = AddLabel(L"크기");
+    headingSize_ = AddSizeCombo(IDC_HEADING_SIZE, {L"12", L"14", L"16", L"18", L"20", L"22", L"24", L"28"});
+    bodyFontLabel_ = AddLabel(L"본문 글꼴");
+    bodyFont_ = AddFontCombo(IDC_BODY_FONT);
+    bodySizeLabel_ = AddLabel(L"크기");
+    bodySize_ = AddSizeCombo(IDC_BODY_SIZE, {L"9", L"10", L"10.5", L"11", L"12", L"13", L"14", L"16", L"18"});
+    titleLayoutLabel_ = AddLabel(L"제목 배치");
+    titleAlign_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0,
+                                  0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_TITLE_ALIGN)), instance_,
+                                  nullptr);
+    SendMessageW(titleAlign_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (const wchar_t* text : {L"왼쪽 정렬", L"가운데 정렬", L"오른쪽 정렬"})
+        SendMessageW(titleAlign_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text));
+    titleSizeLabel_ = AddLabel(L"크기");
+    titleSize_ = AddSizeCombo(IDC_TITLE_SIZE, {L"20", L"24", L"27", L"30", L"36", L"40", L"48"});
+    titleReset_ = AddButton(IDM_TITLE_RESET, L"위치 처음대로");
+    greetingLabel_ = AddLabel(L"머리말");
+    greeting_ = AddEdit(IDC_GREETING, true);
+    publisherLabel_ = AddLabel(L"발행처");
+    publisher_ = AddEdit(IDC_PUBLISHER, true);
+
+    list_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
+                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, 0, 0,
+                            0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_ARTICLE_LIST)), instance_, nullptr);
+    SendMessageW(list_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    addButton_ = AddButton(IDM_ADD_ARTICLE, L"기사 추가");
+    duplicateButton_ = AddButton(IDM_DUPLICATE_ARTICLE, L"복제");
+    deleteButton_ = AddButton(IDM_DELETE_ARTICLE, L"삭제");
+    upButton_ = AddButton(IDM_MOVE_UP, L"▲ 위로");
+    downButton_ = AddButton(IDM_MOVE_DOWN, L"▼ 아래로");
+
+    categoryLabel_ = AddLabel(L"분류");
+    category_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN |
+                                CBS_AUTOHSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CATEGORY)), instance_,
+                                nullptr);
+    SendMessageW(category_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (const auto& c : nl::DefaultCategories())
+        SendMessageW(category_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(c.c_str()));
+    articleTitleLabel_ = AddLabel(L"기사 제목");
+    articleTitle_ = AddEdit(IDC_ART_TITLE, false);
+
+    // 탭 1: 본문
+    body_ = AddEdit(IDC_BODY, true);
+    bodyHint_ = AddLabel(L"\"- \"로 시작하면 글머리표, 빈 줄은 문단 구분", SS_ENDELLIPSIS);
+    pageBreakButton_ = AddButton(IDM_INSERT_PAGE_BREAK, L"쪽 나누기 넣기");
+    tabPages_[0] = {body_, bodyHint_, pageBreakButton_};
+
+    // 탭 2: 도서 목록
+    bookList_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
+                                WS_CHILD | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, 0, 0, 0, 0,
+                                hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BOOK_LIST)), instance_, nullptr);
+    SendMessageW(bookList_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    bookAdd_ = AddButton(IDM_BOOK_ADD, L"도서 추가");
+    bookEdit_ = AddButton(IDM_BOOK_EDIT, L"수정");
+    bookDelete_ = AddButton(IDM_BOOK_DELETE, L"삭제");
+    bookUp_ = AddButton(IDM_BOOK_UP, L"▲");
+    bookDown_ = AddButton(IDM_BOOK_DOWN, L"▼");
+    bookColsLabel_ = AddLabel(L"배열");
+    auto radio = [this](int id, const wchar_t* text, bool group) {
+        HWND h = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_TABSTOP | BS_AUTORADIOBUTTON | (group ? WS_GROUP : 0),
+                                 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_, nullptr);
+        SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+        return h;
+    };
+    bookCols1_ = radio(IDC_BOOK_COLS1, L"1열", true);
+    bookCols2_ = radio(IDC_BOOK_COLS2, L"2열", false);
+    bookHint_ = AddLabel(L"도서를 두 번 누르면 수정", SS_ENDELLIPSIS);
+    tabPages_[1] = {bookList_, bookAdd_, bookEdit_, bookDelete_, bookUp_, bookDown_,
+                    bookColsLabel_, bookCols1_, bookCols2_, bookHint_};
+
+    // 탭 3: 제목·쪽 서식
+    artTitleFontLabel_ = AddLabel(L"제목 글꼴");
+    artTitleFont_ = AddFontCombo(IDC_ART_TITLE_FONT);
+    int defaultIndex = static_cast<int>(
+        SendMessageW(artTitleFont_, CB_INSERTSTRING, 0, reinterpret_cast<LPARAM>(L"(문서의 제목 글꼴)")));
+    SendMessageW(artTitleFont_, CB_SETITEMDATA, defaultIndex, static_cast<LPARAM>(-2));
+    artTitleSizeLabel_ = AddLabel(L"제목 크기");
+    artTitleSize_ = AddSizeCombo(IDC_ART_TITLE_SIZE, {L"(기본)", L"12", L"14", L"16", L"18", L"20", L"24", L"28", L"32"});
+    artTitleBold_ = CreateWindowExW(0, L"BUTTON", L"굵게", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_,
+                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_ART_TITLE_BOLD)), instance_, nullptr);
+    SendMessageW(artTitleBold_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    artTitleAlignLabel_ = AddLabel(L"정렬");
+    artTitleAlign_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, hwnd_,
+                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_ART_TITLE_ALIGN)), instance_,
+                                     nullptr);
+    SendMessageW(artTitleAlign_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (const wchar_t* text : {L"왼쪽", L"가운데", L"오른쪽"})
+        SendMessageW(artTitleAlign_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text));
+    artPageBreak_ = CreateWindowExW(0, L"BUTTON", L"이 기사를 새 쪽에서 시작 (쪽 나누기)",
+                                    WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd_,
+                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_ART_PAGE_BREAK)), instance_, nullptr);
+    SendMessageW(artPageBreak_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    formatHint_ = AddLabel(L"본문 안에서 쪽을 나누려면 [본문] 탭의 [쪽 나누기 넣기](Ctrl+Enter)를 쓰세요.", SS_ENDELLIPSIS);
+    tabPages_[2] = {artTitleFontLabel_, artTitleFont_, artTitleSizeLabel_, artTitleSize_, artTitleBold_,
+                    artTitleAlignLabel_, artTitleAlign_, artPageBreak_, formatHint_};
+    for (HWND h : tabPages_[1]) ShowWindow(h, SW_HIDE);
+    for (HWND h : tabPages_[2]) ShowWindow(h, SW_HIDE);
+
+    // 탭 컨트롤은 각 쪽의 컨트롤보다 뒤(그룹 상자보다는 앞)에 놓이도록 이 자리에서 만들고,
+    // WS_CLIPSIBLINGS로 그 컨트롤들 위를 덮어 그리지 않게 합니다.
+    articleTabs_ = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP, 0, 0,
+                                   0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_ARTICLE_TABS)), instance_,
+                                   nullptr);
+    SendMessageW(articleTabs_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (const wchar_t* text : {L"본문", L"도서 목록", L"제목·쪽 서식"}) {
+        TCITEMW tab{};
+        tab.mask = TCIF_TEXT;
+        tab.pszText = const_cast<wchar_t*>(text);
+        SendMessageW(articleTabs_, TCM_INSERTITEMW, SendMessageW(articleTabs_, TCM_GETITEMCOUNT, 0, 0),
+                     reinterpret_cast<LPARAM>(&tab));
+    }
+
+    // 그룹 상자는 다른 컨트롤 뒤(Z 순서 아래)에 놓이도록 마지막에 만듭니다.
+    auto group = [this](const wchar_t* text) {
+        HWND h = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 0, 0, 0, 0, hwnd_, nullptr,
+                                 instance_, nullptr);
+        SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+        return h;
+    };
+    infoGroup_ = group(L"소식지 정보");
+    articleGroup_ = group(L"기사");
+
+
+    // 미리보기 위 그림 도구 줄
+    logoButton_ = AddButton(IDM_INSERT_LOGO, L"로고 넣기");
+    photoButton_ = AddButton(IDM_INSERT_PHOTO, L"사진 추가");
+    deletePictureButton_ = AddButton(IDM_PICTURE_DELETE, L"그림 삭제");
+    backgroundButton_ = AddButton(IDC_BACKGROUND_BUTTON, L"쪽 배경 ▼");
+    pictureHint_ = AddLabel(L"그림은 끌어서 옮기고, 모서리·변의 손잡이로 크기를 바꿉니다. 오른쪽 단추: 그림 메뉴",
+                            SS_ENDELLIPSIS);
+
+    preview_.Create(hwnd_, IDC_PREVIEW, instance_);
+
+    status_ = CreateWindowExW(0, STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, hwnd_,
+                              reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_STATUS)), instance_, nullptr);
+    SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+}
+
+void MainWindow::CreateMenuBar() {
+    HMENU file = CreatePopupMenu();
+    AppendMenuW(file, MF_STRING, IDM_NEW, L"새 소식지(&N)\tCtrl+N");
+    AppendMenuW(file, MF_STRING, IDM_NEW_SAMPLE, L"예제 소식지 열기(&X)");
+    AppendMenuW(file, MF_STRING, IDM_OPEN, L"열기(&O)...\tCtrl+O");
+    AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file, MF_STRING, IDM_SAVE, L"저장(&S)\tCtrl+S");
+    AppendMenuW(file, MF_STRING, IDM_SAVE_AS, L"다른 이름으로 저장(&A)...\tCtrl+Shift+S");
+    AppendMenuW(file, MF_STRING, IDM_EXPORT_HTML, L"HTML로 내보내기(&H)...\tCtrl+E");
+    AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file, MF_STRING, IDM_PRINT, L"인쇄(&P)...\tCtrl+P");
+    AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file, MF_STRING, IDM_EXIT, L"끝내기(&X)");
+
+    HMENU edit = CreatePopupMenu();
+    AppendMenuW(edit, MF_STRING, IDM_ADD_ARTICLE, L"기사 추가(&A)\tCtrl+Shift+N");
+    AppendMenuW(edit, MF_STRING, IDM_DUPLICATE_ARTICLE, L"기사 복제(&C)\tCtrl+Shift+D");
+    AppendMenuW(edit, MF_STRING, IDM_DELETE_ARTICLE, L"기사 삭제(&D)");
+    AppendMenuW(edit, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(edit, MF_STRING, IDM_MOVE_UP, L"위로 이동(&U)\tCtrl+Shift+↑");
+    AppendMenuW(edit, MF_STRING, IDM_MOVE_DOWN, L"아래로 이동(&W)\tCtrl+Shift+↓");
+    AppendMenuW(edit, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(edit, MF_STRING, IDM_INSERT_PAGE_BREAK, L"쪽 나누기 넣기(&P)\tCtrl+Enter");
+    AppendMenuW(edit, MF_STRING, IDM_BOOK_ADD, L"도서 추가(&B)...");
+
+    HMENU view = CreatePopupMenu();
+    AppendMenuW(view, MF_STRING, IDM_ZOOM_IN, L"확대(&I)\tCtrl++");
+    AppendMenuW(view, MF_STRING, IDM_ZOOM_OUT, L"축소(&O)\tCtrl+-");
+    AppendMenuW(view, MF_STRING, IDM_ZOOM_FIT, L"너비에 맞춤(&F)\tCtrl+0");
+
+    HMENU insert = CreatePopupMenu();
+    AppendMenuW(insert, MF_STRING, IDM_INSERT_LOGO, L"로고 넣기(&L)...");
+    AppendMenuW(insert, MF_STRING, IDM_INSERT_PHOTO, L"사진 추가(&P)...");
+    AppendMenuW(insert, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_REPLACE, L"그림 바꾸기(&R)...");
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_ASPECT, L"원래 비율로 맞추기(&O)");
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_WRAP, L"글이 그림을 피해 가기(&W)");
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_FRONT, L"맨 앞으로 가져오기(&F)");
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_BACK, L"맨 뒤로 보내기(&B)");
+    AppendMenuW(insert, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_DELETE, L"그림 삭제(&D)\tDel");
+    AppendMenuW(insert, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(insert, MF_STRING, IDM_BACKGROUND_PAGE, L"이 쪽 배경 그림(&G)...");
+    AppendMenuW(insert, MF_STRING, IDM_BACKGROUND_ALL, L"모든 쪽 배경 그림(&K)...");
+
+    HMENU help = CreatePopupMenu();
+    AppendMenuW(help, MF_STRING, IDM_ABOUT, L"정보(&A)...");
+
+    HMENU bar = CreateMenu();
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"파일(&F)");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(edit), L"편집(&E)");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(insert), L"삽입(&I)");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"보기(&V)");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"도움말(&H)");
+    SetMenu(hwnd_, bar);
+}
+
+void MainWindow::LayoutControls() {
+    RECT client;
+    GetClientRect(hwnd_, &client);
+    SendMessageW(status_, WM_SIZE, 0, 0);
+    RECT statusRect;
+    GetWindowRect(status_, &statusRect);
+    const int statusH = statusRect.bottom - statusRect.top;
+
+    int parts[] = {S(160), S(280), S(400), -1};
+    SendMessageW(status_, SB_SETPARTS, 4, reinterpret_cast<LPARAM>(parts));
+
+    const int pad = S(10);
+    const int panelW = S(470);
+    const int rowH = S(26);
+    const int rowStep = S(32);
+    const int labelW = S(66);
+    const int colGap = S(14);
+    const int bottom = client.bottom - statusH - pad;
+
+    HDWP dwp = BeginDeferWindowPos(40);
+    auto place = [&dwp](HWND h, int x, int y, int w, int hgt) {
+        dwp = DeferWindowPos(dwp, h, nullptr, x, y, std::max(0, w), std::max(0, hgt), SWP_NOZORDER | SWP_NOACTIVATE);
+    };
+
+    // 소식지 정보 그룹
+    const int il = pad + S(12);
+    const int ir = panelW - S(12);
+    // 왼쪽 열(도서관명·발행일)을 조금 더 넓게 잡습니다.
+    const int half = (ir - il - colGap) * 3 / 5;
+    const int col2 = il + half + colGap;
+    int y = pad + S(24);
+
+    place(libraryLabel_, il, y, labelW, rowH);
+    place(library_, il + labelW, y, half - labelW, rowH);
+    place(issueLabel_, col2, y, S(44), rowH);
+    place(issue_, col2 + S(44), y, ir - col2 - S(44), rowH);
+    y += rowStep;
+    place(titleLabel_, il, y, labelW, rowH);
+    place(title_, il + labelW, y, ir - il - labelW, rowH);
+    y += rowStep;
+    place(dateLabel_, il, y, labelW, rowH);
+    place(date_, il + labelW, y, half - labelW - S(52), rowH);
+    place(today_, il + half - S(48), y, S(48), rowH);
+    place(themeLabel_, col2, y, S(44), rowH);
+    place(theme_, col2 + S(44), y, ir - col2 - S(44), S(260));
+    y += rowStep;
+    {
+        // 글꼴 [목록] 크기 [값] 두 줄, 그리고 제목 배치 줄
+        const int sizeW = S(64), sizeLabelW = S(34);
+        const int sizeX = ir - sizeW;
+        const int fontRight = sizeX - sizeLabelW - S(4);
+        place(headingFontLabel_, il, y, labelW, rowH);
+        place(headingFont_, il + labelW, y, fontRight - il - labelW, S(360));
+        place(headingSizeLabel_, sizeX - sizeLabelW, y, sizeLabelW, rowH);
+        place(headingSize_, sizeX, y, sizeW, S(240));
+        y += rowStep;
+        place(bodyFontLabel_, il, y, labelW, rowH);
+        place(bodyFont_, il + labelW, y, fontRight - il - labelW, S(360));
+        place(bodySizeLabel_, sizeX - sizeLabelW, y, sizeLabelW, rowH);
+        place(bodySize_, sizeX, y, sizeW, S(240));
+        y += rowStep;
+        const int alignW = S(116);
+        place(titleLayoutLabel_, il, y, labelW, rowH);
+        place(titleAlign_, il + labelW, y, alignW, S(200));
+        int x = il + labelW + alignW + S(8);
+        place(titleSizeLabel_, x, y, sizeLabelW, rowH);
+        place(titleSize_, x + sizeLabelW, y, sizeW, S(240));
+        x += sizeLabelW + sizeW + S(8);
+        place(titleReset_, x, y, ir - x, rowH);
+    }
+    y += rowStep;
+    place(greetingLabel_, il, y, labelW, rowH);
+    place(greeting_, il + labelW, y, ir - il - labelW, S(72));
+    y += S(72) + S(6);
+    // 발행처는 소식지 마지막 쪽 맨 아래에 실리므로 입력란도 머리말 아래에 둡니다.
+    place(publisherLabel_, il, y, labelW, rowH);
+    place(publisher_, il + labelW, y, ir - il - labelW, S(48));
+    y += S(48) + S(12);
+    place(infoGroup_, pad, pad, panelW - pad, y - pad);
+
+    // 기사 그룹
+    const int groupTop = y + S(6);
+    y = groupTop + S(24);
+    const int buttonW = S(86);
+    const int listH = S(118);
+    place(list_, il, y, ir - il - buttonW - S(8), listH);
+    HWND buttons[] = {addButton_, duplicateButton_, deleteButton_, upButton_, downButton_};
+    for (int i = 0; i < 5; ++i) place(buttons[i], ir - buttonW, y + i * S(24), buttonW, S(22));
+    y += listH + S(8);
+    place(categoryLabel_, il, y, labelW, rowH);
+    place(category_, il + labelW, y, S(200), S(240));
+    y += rowStep;
+    place(articleTitleLabel_, il, y, labelW, rowH);
+    place(articleTitle_, il + labelW, y, ir - il - labelW, rowH);
+    y += rowStep;
+
+    // 기사 편집 탭: 탭 안쪽 영역에 각 쪽의 컨트롤을 놓습니다.
+    const int groupBottom = std::max(y + S(170), bottom);
+    const int tabBottom = groupBottom - S(10);
+    place(articleTabs_, il, y, ir - il, tabBottom - y);
+    RECT page{il, y, ir, tabBottom};
+    SendMessageW(articleTabs_, TCM_ADJUSTRECT, FALSE, reinterpret_cast<LPARAM>(&page));
+    InflateRect(&page, -S(4), -S(4));
+    const int pw = page.right - page.left, ph = page.bottom - page.top;
+    const int barH = S(24);
+    {
+        // 본문
+        place(body_, page.left, page.top, pw, ph - barH - S(6));
+        const int bw = S(110);
+        place(bodyHint_, page.left, page.bottom - barH, pw - bw - S(6), barH);
+        place(pageBreakButton_, page.right - bw, page.bottom - barH, bw, barH);
+    }
+    {
+        // 도서 목록
+        const int bw = S(76);
+        place(bookList_, page.left, page.top, pw - bw - S(6), ph - barH - S(6));
+        HWND bookButtons[] = {bookAdd_, bookEdit_, bookDelete_, bookUp_, bookDown_};
+        for (int i = 0; i < 5; ++i) place(bookButtons[i], page.right - bw, page.top + i * S(26), bw, S(23));
+        int x = page.left;
+        place(bookColsLabel_, x, page.bottom - barH, S(36), barH);
+        x += S(36);
+        place(bookCols1_, x, page.bottom - barH, S(54), barH);
+        x += S(56);
+        place(bookCols2_, x, page.bottom - barH, S(54), barH);
+        x += S(62);
+        place(bookHint_, x, page.bottom - barH, page.right - x, barH);
+    }
+    {
+        // 제목·쪽 서식
+        const int lw = S(70);
+        int ry = page.top;
+        place(artTitleFontLabel_, page.left, ry, lw, rowH);
+        place(artTitleFont_, page.left + lw, ry, pw - lw, S(360));
+        ry += rowStep;
+        place(artTitleSizeLabel_, page.left, ry, lw, rowH);
+        place(artTitleSize_, page.left + lw, ry, S(76), S(260));
+        int x = page.left + lw + S(84);
+        place(artTitleBold_, x, ry, S(60), rowH);
+        x += S(66);
+        place(artTitleAlignLabel_, x, ry, S(34), rowH);
+        place(artTitleAlign_, x + S(34), ry, page.right - x - S(34), S(200));
+        ry += rowStep;
+        place(artPageBreak_, page.left, ry, pw, rowH);
+        ry += rowStep;
+        place(formatHint_, page.left, ry, pw, rowH);
+    }
+    place(articleGroup_, pad, groupTop, panelW - pad, groupBottom - groupTop);
+
+    // 그림 도구 줄 + 미리보기
+    const int previewLeft = panelW + pad;
+    const int toolH = S(28);
+    int bx = previewLeft;
+    for (HWND b : {logoButton_, photoButton_, deletePictureButton_, backgroundButton_}) {
+        place(b, bx, pad, S(86), toolH);
+        bx += S(86) + S(6);
+    }
+    place(pictureHint_, bx + S(6), pad, client.right - pad - bx - S(6), toolH);
+    const int previewTop = pad + toolH + S(8);
+    place(preview_.hwnd(), previewLeft, previewTop, client.right - panelW - 2 * pad, bottom - previewTop);
+
+    EndDeferWindowPos(dwp);
+}
+
+// ---------------------------------------------------------------------------
+// 문서 <-> 화면
+
+void MainWindow::LoadDocumentToUi() {
+    loading_ = true;
+    SetWindowTextW(library_, doc_.libraryName.c_str());
+    SetWindowTextW(issue_, doc_.issue.c_str());
+    SetWindowTextW(title_, doc_.title.c_str());
+    SetWindowTextW(date_, doc_.date.c_str());
+    SetWindowTextW(publisher_, nl::ToCrLf(doc_.publisher).c_str());
+    SetWindowTextW(greeting_, nl::ToCrLf(doc_.greeting).c_str());
+    SendMessageW(theme_, CB_SETCURSEL, doc_.theme, 0);
+    SelectFontInCombo(headingFont_, nl::FontOrDefault(doc_.headingFont));
+    SelectFontInCombo(bodyFont_, nl::FontOrDefault(doc_.bodyFont));
+    SyncFormatControls();
+
+    SendMessageW(list_, LB_RESETCONTENT, 0, 0);
+    for (const auto& a : doc_.articles)
+        SendMessageW(list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(ListItemText(a).c_str()));
+    loading_ = false;
+
+    current_ = -1;
+    SelectArticle(doc_.articles.empty() ? -1 : 0);
+    images_.Prune(doc_);
+    preview_.SetDocument(&doc_, &images_);
+    UpdateStatus();
+}
+
+void MainWindow::SelectArticle(int index) {
+    if (index >= static_cast<int>(doc_.articles.size())) index = static_cast<int>(doc_.articles.size()) - 1;
+    current_ = index;
+    loading_ = true;
+    SendMessageW(list_, LB_SETCURSEL, index, 0);
+    bool has = index >= 0;
+    const nl::Article empty;
+    const nl::Article& a = has ? doc_.articles[index] : empty;
+    SetWindowTextW(category_, a.category.c_str());
+    SetWindowTextW(articleTitle_, a.title.c_str());
+    SetWindowTextW(body_, nl::ToCrLf(a.body).c_str());
+    for (HWND h : {category_, articleTitle_, body_, categoryLabel_, articleTitleLabel_, pageBreakButton_, bookAdd_,
+                   bookCols1_, bookCols2_, artTitleFont_, artTitleSize_, artTitleBold_, artTitleAlign_, artPageBreak_})
+        EnableWindow(h, has);
+    loading_ = false;
+    LoadArticleFormat();
+    RefreshBookList(-1);
+    UpdateArticleButtons();
+}
+
+void MainWindow::RefreshArticleItem(int index) {
+    if (index < 0 || index >= static_cast<int>(doc_.articles.size())) return;
+    loading_ = true;
+    int top = static_cast<int>(SendMessageW(list_, LB_GETTOPINDEX, 0, 0));
+    SendMessageW(list_, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(list_, LB_DELETESTRING, index, 0);
+    SendMessageW(list_, LB_INSERTSTRING, index, reinterpret_cast<LPARAM>(ListItemText(doc_.articles[index]).c_str()));
+    SendMessageW(list_, LB_SETCURSEL, current_, 0);
+    SendMessageW(list_, LB_SETTOPINDEX, top, 0);
+    SendMessageW(list_, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(list_, nullptr, TRUE);
+    loading_ = false;
+}
+
+void MainWindow::UpdateArticleButtons() {
+    int count = static_cast<int>(doc_.articles.size());
+    bool has = current_ >= 0;
+    EnableWindow(duplicateButton_, has);
+    EnableWindow(deleteButton_, has);
+    EnableWindow(upButton_, has && current_ > 0);
+    EnableWindow(downButton_, has && current_ < count - 1);
+
+    HMENU menu = GetMenu(hwnd_);
+    if (!menu) return;
+    auto enable = [menu](int id, bool on) { EnableMenuItem(menu, id, MF_BYCOMMAND | (on ? MF_ENABLED : MF_GRAYED)); };
+    enable(IDM_DUPLICATE_ARTICLE, has);
+    enable(IDM_DELETE_ARTICLE, has);
+    enable(IDM_MOVE_UP, has && current_ > 0);
+    enable(IDM_MOVE_DOWN, has && current_ < count - 1);
+}
+
+void MainWindow::OnInfoChanged(int id) {
+    switch (id) {
+        case IDC_LIBRARY: doc_.libraryName = GetText(library_); break;
+        case IDC_ISSUE: doc_.issue = GetText(issue_); break;
+        case IDC_TITLE: doc_.title = GetText(title_); break;
+        case IDC_DATE: doc_.date = GetText(date_); break;
+        case IDC_PUBLISHER: doc_.publisher = nl::NormalizeNewlines(GetText(publisher_)); break;
+        case IDC_GREETING: doc_.greeting = nl::NormalizeNewlines(GetText(greeting_)); break;
+        case IDC_THEME: {
+            int sel = static_cast<int>(SendMessageW(theme_, CB_GETCURSEL, 0, 0));
+            doc_.theme = sel < 0 ? 0 : sel;
+            break;
+        }
+        case IDC_TITLE_ALIGN: {
+            int sel = static_cast<int>(SendMessageW(titleAlign_, CB_GETCURSEL, 0, 0));
+            doc_.titleAlign = sel == 1 ? nl::TitleAlign::Center : sel == 2 ? nl::TitleAlign::Right : nl::TitleAlign::Left;
+            break;
+        }
+        case IDC_HEADING_FONT:
+        case IDC_BODY_FONT: {
+            HWND combo = id == IDC_HEADING_FONT ? headingFont_ : bodyFont_;
+            int sel = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+            if (sel < 0) return;
+            int len = static_cast<int>(SendMessageW(combo, CB_GETLBTEXTLEN, sel, 0));
+            std::wstring face(static_cast<size_t>(len) + 1, L'\0');
+            SendMessageW(combo, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(&face[0]));
+            face.resize(static_cast<size_t>(len));
+            (id == IDC_HEADING_FONT ? doc_.headingFont : doc_.bodyFont) = face;
+            break;
+        }
+        default: return;
+    }
+    MarkDirty();
+    preview_.Refresh();
+}
+
+void MainWindow::OnArticleChanged(int id, int code) {
+    if (current_ < 0) return;
+    nl::Article& a = doc_.articles[current_];
+    switch (id) {
+        case IDC_CATEGORY:
+            if (code == CBN_SELCHANGE) {
+                // 선택 알림 시점에는 편집 칸 글자가 아직 바뀌지 않았으므로 목록에서 직접 읽습니다.
+                int sel = static_cast<int>(SendMessageW(category_, CB_GETCURSEL, 0, 0));
+                if (sel < 0) return;
+                int len = static_cast<int>(SendMessageW(category_, CB_GETLBTEXTLEN, sel, 0));
+                std::wstring text(static_cast<size_t>(len) + 1, L'\0');
+                SendMessageW(category_, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(&text[0]));
+                text.resize(static_cast<size_t>(len));
+                a.category = text;
+                // 도서 분류를 고르면 도서 목록 탭을 바로 보여 줍니다.
+                if (text.find(L"도서") != std::wstring::npos) ShowArticleTab(1);
+            } else {
+                a.category = GetText(category_);
+            }
+            RefreshArticleItem(current_);
+            break;
+        case IDC_ART_TITLE:
+            a.title = GetText(articleTitle_);
+            RefreshArticleItem(current_);
+            break;
+        case IDC_BODY:
+            a.body = nl::NormalizeNewlines(GetText(body_));
+            break;
+        default:
+            return;
+    }
+    MarkDirty();
+    preview_.Refresh();
+}
+
+// ---------------------------------------------------------------------------
+// 기사 편집
+
+void MainWindow::AddArticle(bool duplicate) {
+    nl::Article article;
+    if (duplicate) {
+        if (current_ < 0) return;
+        article = doc_.articles[current_];
+        article.title += L" (사본)";
+    } else {
+        article = nl::CreateArticle(current_ >= 0 ? doc_.articles[current_].category : nl::DefaultCategories()[0]);
+    }
+    int index = current_ >= 0 ? current_ + 1 : static_cast<int>(doc_.articles.size());
+    doc_.articles.insert(doc_.articles.begin() + index, article);
+    loading_ = true;
+    SendMessageW(list_, LB_INSERTSTRING, index, reinterpret_cast<LPARAM>(ListItemText(article).c_str()));
+    loading_ = false;
+    SelectArticle(index);
+    MarkDirty();
+    preview_.Refresh();
+    UpdateStatus();
+
+    SetFocus(articleTitle_);
+    SendMessageW(articleTitle_, EM_SETSEL, 0, -1);
+}
+
+void MainWindow::DeleteArticle() {
+    if (current_ < 0) return;
+    std::wstring message = L"'" + ListItemText(doc_.articles[current_]) + L"' 기사를 삭제할까요?";
+    if (MessageBoxW(hwnd_, message.c_str(), kAppName, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
+    int index = current_;
+    doc_.articles.erase(doc_.articles.begin() + index);
+    loading_ = true;
+    SendMessageW(list_, LB_DELETESTRING, index, 0);
+    loading_ = false;
+    SelectArticle(std::min(index, static_cast<int>(doc_.articles.size()) - 1));
+    MarkDirty();
+    preview_.Refresh();
+    UpdateStatus();
+}
+
+void MainWindow::MoveArticle(int delta) {
+    int target = current_ + delta;
+    if (current_ < 0 || target < 0 || target >= static_cast<int>(doc_.articles.size())) return;
+    std::swap(doc_.articles[current_], doc_.articles[target]);
+    int from = current_;
+    current_ = target;
+    RefreshArticleItem(from);
+    RefreshArticleItem(target);
+    SendMessageW(list_, LB_SETCURSEL, target, 0);
+    UpdateArticleButtons();
+    MarkDirty();
+    preview_.Refresh();
+}
+
+// ---------------------------------------------------------------------------
+// 파일
+
+void MainWindow::NewDocument(bool sample) {
+    doc_ = sample ? nl::CreateSample() : nl::CreateBlank();
+    path_.clear();
+    LoadDocumentToUi();
+    SetClean();
+}
+
+bool MainWindow::OpenPath(const std::wstring& path) {
+    std::string bytes;
+    if (!ReadFileBytes(path, bytes)) {
+        MessageBoxW(hwnd_, (L"파일을 읽을 수 없습니다.\n" + path + L"\n\n" + LastErrorText()).c_str(), kAppName,
+                    MB_OK | MB_ICONERROR);
+        return false;
+    }
+    nl::Newsletter loaded;
+    std::wstring error;
+    if (!nl::Deserialize(bytes, loaded, error)) {
+        MessageBoxW(hwnd_, (L"파일을 열 수 없습니다.\n" + path + L"\n\n" + error).c_str(), kAppName,
+                    MB_OK | MB_ICONERROR);
+        return false;
+    }
+    doc_ = loaded;
+    path_ = path;
+    LoadDocumentToUi();
+    SetClean();
+    return true;
+}
+
+bool MainWindow::ConfirmDiscard() {
+    if (!dirty_) return true;
+    std::wstring name = path_.empty() ? L"제목 없음" : FileNameOf(path_);
+    std::wstring message = L"'" + name + L"'의 변경 내용을 저장할까요?";
+    switch (MessageBoxW(hwnd_, message.c_str(), kAppName, MB_YESNOCANCEL | MB_ICONQUESTION)) {
+        case IDYES: return Save();
+        case IDNO: return true;
+        default: return false;
+    }
+}
+
+bool MainWindow::Save() {
+    if (path_.empty()) return SaveAs();
+    return WriteDocument(path_);
+}
+
+std::wstring MainWindow::SuggestedFileName() const {
+    if (!path_.empty()) {
+        std::wstring name = FileNameOf(path_);
+        size_t dot = name.find_last_of(L'.');
+        return dot == std::wstring::npos ? name : name.substr(0, dot);
+    }
+    return SanitizeFileName(nl::Trim(doc_.title + L" " + doc_.issue));
+}
+
+bool MainWindow::SaveAs() {
+    wchar_t file[MAX_PATH] = {};
+    lstrcpynW(file, SuggestedFileName().c_str(), MAX_PATH);
+    OPENFILENAMEW ofn{sizeof(ofn)};
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = kFileFilter;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = L"lnews";
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOREADONLYRETURN;
+    if (!GetSaveFileNameW(&ofn)) return false;
+    if (!WriteDocument(file)) return false;
+    path_ = file;
+    UpdateTitle();
+    UpdateStatus();
+    return true;
+}
+
+bool MainWindow::WriteDocument(const std::wstring& path) {
+    if (!WriteFileBytes(path, nl::Serialize(doc_))) {
+        MessageBoxW(hwnd_, (L"저장하지 못했습니다.\n" + path + L"\n\n" + LastErrorText()).c_str(), kAppName,
+                    MB_OK | MB_ICONERROR);
+        return false;
+    }
+    SetClean();
+    return true;
+}
+
+void MainWindow::Open() {
+    if (!ConfirmDiscard()) return;
+    wchar_t file[MAX_PATH] = {};
+    OPENFILENAMEW ofn{sizeof(ofn)};
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = kFileFilter;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = L"lnews";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (GetOpenFileNameW(&ofn)) OpenPath(file);
+}
+
+void MainWindow::ExportHtml() {
+    wchar_t file[MAX_PATH] = {};
+    lstrcpynW(file, SuggestedFileName().c_str(), MAX_PATH);
+    OPENFILENAMEW ofn{sizeof(ofn)};
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = kHtmlFilter;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = L"html";
+    ofn.lpstrTitle = L"HTML로 내보내기";
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOREADONLYRETURN;
+    if (!GetSaveFileNameW(&ofn)) return;
+    // 쪽 위 사진 위치로부터 HTML에서 어느 기사 옆에 띄울지 정합니다.
+    nl::Newsletter exported = doc_;
+    nl::Renderer layout;
+    layout.Layout(exported);
+    for (nl::Picture& p : exported.pictures) p.anchor = layout.AnchorFor(p.page, p.y + p.height / 2);
+    if (!WriteFileBytes(file, nl::ExportHtml(exported))) {
+        MessageBoxW(hwnd_, (std::wstring(L"내보내지 못했습니다.\n") + file + L"\n\n" + LastErrorText()).c_str(),
+                    kAppName, MB_OK | MB_ICONERROR);
+        return;
+    }
+    if (MessageBoxW(hwnd_, L"HTML 파일을 만들었습니다. 지금 웹 브라우저로 열어 볼까요?", kAppName,
+                    MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+        ShellExecuteW(hwnd_, L"open", file, nullptr, nullptr, SW_SHOWNORMAL);
+    }
+}
+
+void MainWindow::Print() {
+    // 화면과 같은 배치를 인쇄용으로 한 번 더 계산합니다(배치는 장치와 무관하므로 쪽 나눔이 같습니다).
+    nl::Renderer renderer;
+    renderer.Layout(doc_);
+    const int pageCount = renderer.PageCount();
+
+    PRINTDLGW pd{sizeof(pd)};
+    pd.hwndOwner = hwnd_;
+    pd.Flags = PD_RETURNDC | PD_NOSELECTION | PD_USEDEVMODECOPIESANDCOLLATE;
+    pd.nMinPage = 1;
+    pd.nMaxPage = static_cast<WORD>(pageCount);
+    pd.nFromPage = 1;
+    pd.nToPage = static_cast<WORD>(pageCount);
+    pd.nCopies = 1;
+    if (!PrintDlgW(&pd)) return;
+
+    int first = 0, last = pageCount - 1;
+    if (pd.Flags & PD_PAGENUMS) {
+        first = std::max(1, static_cast<int>(pd.nFromPage)) - 1;
+        last = std::min(pageCount, static_cast<int>(pd.nToPage)) - 1;
+    }
+
+    HDC dc = pd.hDC;
+    std::wstring docName = nl::Trim(doc_.title + L" " + doc_.issue);
+    if (docName.empty()) docName = kAppName;
+    DOCINFOW info{sizeof(info)};
+    info.lpszDocName = docName.c_str();
+
+    bool ok = StartDocW(dc, &info) > 0;
+    for (int page = first; ok && page <= last; ++page) {
+        ok = StartPage(dc) > 0;
+        if (!ok) break;
+        // 인쇄 가능한 영역에 쪽 전체가 들어가도록 비율을 유지해 맞춥니다.
+        int printableW = GetDeviceCaps(dc, HORZRES);
+        int printableH = GetDeviceCaps(dc, VERTRES);
+        double scale = std::min(static_cast<double>(printableW) / nl::kPageWidth,
+                                static_cast<double>(printableH) / nl::kPageHeight);
+        int offsetX = static_cast<int>((printableW - nl::kPageWidth * scale) / 2);
+        int offsetY = static_cast<int>((printableH - nl::kPageHeight * scale) / 2);
+        nl::SetupPageMapping(dc, scale);
+        SetViewportOrgEx(dc, offsetX, offsetY, nullptr);
+        renderer.DrawPage(dc, page, doc_, &images_, true);
+        ok = EndPage(dc) > 0;
+    }
+    if (ok) EndDoc(dc);
+    else AbortDoc(dc);
+
+    DeleteDC(dc);
+    if (pd.hDevMode) GlobalFree(pd.hDevMode);
+    if (pd.hDevNames) GlobalFree(pd.hDevNames);
+    if (!ok) MessageBoxW(hwnd_, L"인쇄하는 중에 오류가 발생했습니다.", kAppName, MB_OK | MB_ICONERROR);
+}
+
+// ---------------------------------------------------------------------------
+// 글꼴 고르기
+
+namespace {
+
+struct FontEnumState {
+    std::map<std::wstring, std::pair<bool, bool>> fonts;  // 이름 -> (한글 지원, 기호 아닌 문자 집합 있음)
+};
+
+int CALLBACK EnumFontProc(const LOGFONTW* lf, const TEXTMETRICW*, DWORD, LPARAM param) {
+    auto* state = reinterpret_cast<FontEnumState*>(param);
+    if (lf->lfFaceName[0] == L'@' || lf->lfFaceName[0] == L'\0') return 1;  // 세로쓰기용 글꼴은 뺌
+    auto& flags = state->fonts[lf->lfFaceName];
+    if (lf->lfCharSet == HANGUL_CHARSET || lf->lfCharSet == JOHAB_CHARSET) flags.first = true;
+    if (lf->lfCharSet != SYMBOL_CHARSET) flags.second = true;
+    return 1;
+}
+
+}  // namespace
+
+// 설치된 글꼴 목록을 읽습니다. 한글 글꼴을 먼저, 그다음 나머지를 이름순으로 둡니다.
+void MainWindow::LoadSystemFonts() {
+    FontEnumState state;
+    LOGFONTW lf{};
+    lf.lfCharSet = DEFAULT_CHARSET;
+    HDC dc = GetDC(nullptr);
+    EnumFontFamiliesExW(dc, &lf, EnumFontProc, reinterpret_cast<LPARAM>(&state), 0);
+    ReleaseDC(nullptr, dc);
+
+    systemFonts_.clear();
+    for (const auto& entry : state.fonts) {
+        FontInfo info;
+        info.name = entry.first;
+        info.hangul = entry.second.first;
+        info.symbol = !entry.second.second;
+        systemFonts_.push_back(info);
+    }
+    std::stable_sort(systemFonts_.begin(), systemFonts_.end(),
+                     [](const FontInfo& a, const FontInfo& b) { return a.hangul && !b.hangul; });
+}
+
+HWND MainWindow::AddFontCombo(int id) {
+    HWND combo = CreateWindowExW(0, L"COMBOBOX", L"",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST |
+                                     CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
+                                 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_,
+                                 nullptr);
+    SendMessageW(combo, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (size_t i = 0; i < systemFonts_.size(); ++i) {
+        int index = static_cast<int>(
+            SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(systemFonts_[i].name.c_str())));
+        SendMessageW(combo, CB_SETITEMDATA, index, static_cast<LPARAM>(i));
+    }
+    SendMessageW(combo, CB_SETDROPPEDWIDTH, S(260), 0);
+    return combo;
+}
+
+// 문서의 글꼴을 목록에서 고릅니다. 이 컴퓨터에 없는 글꼴이면(다른 PC에서 만든 파일) 목록 끝에 덧붙입니다.
+void MainWindow::SelectFontInCombo(HWND combo, const std::wstring& face) {
+    int index = static_cast<int>(SendMessageW(combo, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+                                              reinterpret_cast<LPARAM>(face.c_str())));
+    if (index == CB_ERR) {
+        index = static_cast<int>(SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(face.c_str())));
+        SendMessageW(combo, CB_SETITEMDATA, index, static_cast<LPARAM>(-1));
+    }
+    SendMessageW(combo, CB_SETCURSEL, index, 0);
+}
+
+HFONT MainWindow::PreviewFont(const std::wstring& face) {
+    auto it = previewFonts_.find(face);
+    if (it != previewFonts_.end()) return it->second;
+    HFONT font = CreateFontW(-MulDiv(10, dpi_, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                             face.substr(0, LF_FACESIZE - 1).c_str());
+    previewFonts_[face] = font;
+    return font;
+}
+
+// 글꼴 목록의 각 항목을 그 글꼴 모양으로 그려, 고르기 전에 생김새를 볼 수 있게 합니다.
+void MainWindow::DrawFontItem(const DRAWITEMSTRUCT* item) {
+    HDC dc = item->hDC;
+    RECT rc = item->rcItem;
+    bool selected = (item->itemState & ODS_SELECTED) != 0;
+    FillRect(dc, &rc, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+    if (item->itemID == static_cast<UINT>(-1)) return;
+
+    int len = static_cast<int>(SendMessageW(item->hwndItem, CB_GETLBTEXTLEN, item->itemID, 0));
+    if (len <= 0) return;
+    std::wstring face(static_cast<size_t>(len) + 1, L'\0');
+    SendMessageW(item->hwndItem, CB_GETLBTEXT, item->itemID, reinterpret_cast<LPARAM>(&face[0]));
+    face.resize(static_cast<size_t>(len));
+    LPARAM data = static_cast<LPARAM>(item->itemData);
+    bool installed = data >= 0 && data < static_cast<LPARAM>(systemFonts_.size());
+
+    std::wstring text = face;
+    HFONT font = uiFont_;
+    if (data == -2) {
+        // "(문서의 제목 글꼴)" 같은 기본값 항목
+    } else if (!installed) {
+        text += L" (설치 안 됨)";
+    } else if (!systemFonts_[data].symbol) {
+        // 자기 이름의 글자가 없는 글꼴(□로 보임)은 화면 글꼴로 이름을 보여 줍니다.
+        auto known = canDrawOwnName_.find(face);
+        if (known == canDrawOwnName_.end()) {
+            HGDIOBJ old = SelectObject(dc, PreviewFont(face));
+            std::vector<WORD> glyphs(face.size());
+            bool ok = GetGlyphIndicesW(dc, face.c_str(), static_cast<int>(face.size()), glyphs.data(),
+                                       GGI_MARK_NONEXISTING_GLYPHS) != GDI_ERROR;
+            for (WORD g : glyphs) ok = ok && g != 0xFFFF;
+            SelectObject(dc, old);
+            known = canDrawOwnName_.emplace(face, ok).first;
+        }
+        if (known->second) font = PreviewFont(face);
+    }
+
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT
+                                          : (installed || data == -2 ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT)));
+    RECT textRect = rc;
+    textRect.left += S(4);
+    DrawTextW(dc, text.c_str(), -1, &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    SelectObject(dc, oldFont);
+    if ((item->itemState & ODS_FOCUS) && !(item->itemState & ODS_COMBOBOXEDIT)) DrawFocusRect(dc, &rc);
+}
+
+// ---------------------------------------------------------------------------
+// 기사 편집 탭
+
+void MainWindow::ShowArticleTab(int tab) {
+    articleTab_ = std::clamp(tab, 0, 2);
+    if (static_cast<int>(SendMessageW(articleTabs_, TCM_GETCURSEL, 0, 0)) != articleTab_)
+        SendMessageW(articleTabs_, TCM_SETCURSEL, articleTab_, 0);
+    for (int i = 0; i < 3; ++i) {
+        for (HWND h : tabPages_[i]) ShowWindow(h, i == articleTab_ ? SW_SHOW : SW_HIDE);
+    }
+    if (articleTab_ == 1) UpdateBookButtons();
+}
+
+void MainWindow::UpdateTabLabels() {
+    size_t count = current_ >= 0 ? doc_.articles[current_].books.size() : 0;
+    std::wstring text = count ? L"도서 목록 (" + std::to_wstring(count) + L")" : L"도서 목록";
+    wchar_t current[64] = {};
+    TCITEMW tab{};
+    tab.mask = TCIF_TEXT;
+    tab.pszText = current;
+    tab.cchTextMax = 64;
+    SendMessageW(articleTabs_, TCM_GETITEMW, 1, reinterpret_cast<LPARAM>(&tab));
+    if (text == current) return;
+    tab.pszText = &text[0];
+    SendMessageW(articleTabs_, TCM_SETITEMW, 1, reinterpret_cast<LPARAM>(&tab));
+    // 탭 이름이 짧아지면 예전 글자가 남지 않도록 탭 줄 전체를 다시 그립니다.
+    InvalidateRect(articleTabs_, nullptr, TRUE);
+}
+
+// 선택한 기사의 제목 서식·쪽 나누기·도서 배열 값을 [제목·쪽 서식]/[도서 목록] 탭에 보여 줍니다.
+void MainWindow::LoadArticleFormat() {
+    bool wasLoading = loading_;
+    loading_ = true;
+    nl::Article defaults;
+    const nl::Article& a = current_ >= 0 ? doc_.articles[current_] : defaults;
+    if (nl::Trim(a.titleFont).empty()) SendMessageW(artTitleFont_, CB_SETCURSEL, 0, 0);
+    else SelectFontInCombo(artTitleFont_, nl::Trim(a.titleFont));
+    SetWindowTextW(artTitleSize_, a.titleSize ? nl::FormatFontSize(a.titleSize).c_str() : L"(기본)");
+    SendMessageW(artTitleBold_, BM_SETCHECK, a.titleBold ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(artTitleAlign_, CB_SETCURSEL,
+                 a.titleAlign == nl::TitleAlign::Center ? 1 : a.titleAlign == nl::TitleAlign::Right ? 2 : 0, 0);
+    SendMessageW(artPageBreak_, BM_SETCHECK, a.pageBreakBefore ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(bookCols1_, BM_SETCHECK, a.bookColumns == 2 ? BST_UNCHECKED : BST_CHECKED, 0);
+    SendMessageW(bookCols2_, BM_SETCHECK, a.bookColumns == 2 ? BST_CHECKED : BST_UNCHECKED, 0);
+    loading_ = wasLoading;
+}
+
+void MainWindow::OnArticleFormatChanged(int id, int code) {
+    if (current_ < 0) return;
+    nl::Article& a = doc_.articles[current_];
+    switch (id) {
+        case IDC_ART_TITLE_FONT: {
+            int sel = static_cast<int>(SendMessageW(artTitleFont_, CB_GETCURSEL, 0, 0));
+            if (sel < 0) return;
+            if (static_cast<LPARAM>(SendMessageW(artTitleFont_, CB_GETITEMDATA, sel, 0)) == -2) {
+                a.titleFont.clear();
+            } else {
+                int len = static_cast<int>(SendMessageW(artTitleFont_, CB_GETLBTEXTLEN, sel, 0));
+                std::wstring face(static_cast<size_t>(len) + 1, L'\0');
+                SendMessageW(artTitleFont_, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(&face[0]));
+                face.resize(static_cast<size_t>(len));
+                a.titleFont = face;
+            }
+            break;
+        }
+        case IDC_ART_TITLE_SIZE: {
+            if (code == CBN_KILLFOCUS) {  // 잘못 써 넣은 값은 현재 값으로 되돌려 보여 줌
+                LoadArticleFormat();
+                return;
+            }
+            std::wstring text;
+            if (code == CBN_SELCHANGE) {
+                int sel = static_cast<int>(SendMessageW(artTitleSize_, CB_GETCURSEL, 0, 0));
+                if (sel < 0) return;
+                int len = static_cast<int>(SendMessageW(artTitleSize_, CB_GETLBTEXTLEN, sel, 0));
+                text.assign(static_cast<size_t>(len) + 1, L'\0');
+                SendMessageW(artTitleSize_, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(&text[0]));
+                text.resize(static_cast<size_t>(len));
+            } else {
+                text = GetText(artTitleSize_);
+            }
+            int value = 0;
+            text = nl::Trim(text);
+            if (!text.empty() && text != L"(기본)" && !nl::ParseFontSize(text, &value)) return;
+            if (value == a.titleSize) return;
+            a.titleSize = value;
+            break;
+        }
+        case IDC_ART_TITLE_BOLD:
+            a.titleBold = SendMessageW(artTitleBold_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            break;
+        case IDC_ART_TITLE_ALIGN: {
+            int sel = static_cast<int>(SendMessageW(artTitleAlign_, CB_GETCURSEL, 0, 0));
+            a.titleAlign = sel == 1 ? nl::TitleAlign::Center : sel == 2 ? nl::TitleAlign::Right : nl::TitleAlign::Left;
+            break;
+        }
+        case IDC_ART_PAGE_BREAK:
+            a.pageBreakBefore = SendMessageW(artPageBreak_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            break;
+        case IDC_BOOK_COLS1:
+        case IDC_BOOK_COLS2: {
+            int columns = SendMessageW(bookCols2_, BM_GETCHECK, 0, 0) == BST_CHECKED ? 2 : 1;
+            if (columns == a.bookColumns) return;
+            a.bookColumns = columns;
+            break;
+        }
+        default:
+            return;
+    }
+    ArticleChanged();
+}
+
+void MainWindow::ArticleChanged() {
+    MarkDirty();
+    preview_.Refresh();
+    UpdateStatus();
+}
+
+// 본문의 커서 자리에 [쪽 나누기] 줄을 넣습니다. 미리보기·인쇄에서는 그 자리부터 다음 쪽이 됩니다.
+void MainWindow::InsertPageBreak() {
+    if (current_ < 0) return;
+    ShowArticleTab(0);
+    SetFocus(body_);
+    DWORD start = 0, end = 0;
+    SendMessageW(body_, EM_GETSEL, reinterpret_cast<WPARAM>(&start), reinterpret_cast<LPARAM>(&end));
+    int line = static_cast<int>(SendMessageW(body_, EM_LINEFROMCHAR, start, 0));
+    bool atLineStart = static_cast<DWORD>(SendMessageW(body_, EM_LINEINDEX, line, 0)) == start;
+    // 표시가 한 줄을 온전히 차지하도록, 필요한 곳에만 줄을 바꿉니다.
+    std::wstring all = GetText(body_);
+    bool atLineEnd = end >= all.size() || all[end] == L'\r' || all[end] == L'\n';
+    std::wstring text = (atLineStart ? L"" : L"\r\n") + std::wstring(nl::kPageBreakMarker) + (atLineEnd ? L"" : L"\r\n");
+    SendMessageW(body_, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(text.c_str()));  // EN_CHANGE로 본문에 반영됨
+}
+
+// ---------------------------------------------------------------------------
+// 도서 목록
+
+void MainWindow::RefreshBookList(int select) {
+    SendMessageW(bookList_, LB_RESETCONTENT, 0, 0);
+    if (current_ >= 0) {
+        for (const nl::Book& b : doc_.articles[current_].books) {
+            std::wstring text = L"『" + b.title + L"』";
+            if (!nl::Trim(b.author).empty()) text += L" " + nl::Trim(b.author);
+            if (!nl::Trim(b.publisher).empty()) text += L" · " + nl::Trim(b.publisher);
+            if (!b.cover.empty()) text += L"  [표지]";
+            SendMessageW(bookList_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        }
+    }
+    if (select >= 0) SendMessageW(bookList_, LB_SETCURSEL, select, 0);
+    UpdateBookButtons();
+    UpdateTabLabels();
+}
+
+void MainWindow::UpdateBookButtons() {
+    int count = current_ >= 0 ? static_cast<int>(doc_.articles[current_].books.size()) : 0;
+    int sel = static_cast<int>(SendMessageW(bookList_, LB_GETCURSEL, 0, 0));
+    bool has = sel >= 0 && sel < count;
+    EnableWindow(bookList_, current_ >= 0);
+    EnableWindow(bookEdit_, has);
+    EnableWindow(bookDelete_, has);
+    EnableWindow(bookUp_, has && sel > 0);
+    EnableWindow(bookDown_, has && sel < count - 1);
+}
+
+void MainWindow::AddBook() {
+    if (current_ < 0) return;
+    ShowArticleTab(1);
+    nl::Book book;
+    auto loader = [this](HWND owner, nl::Picture* p) { return LoadPictureFile(owner, L"표지 그림 고르기", p); };
+    if (!BookDialog::Run(hwnd_, instance_, uiFont_, dpi_, &images_, loader, L"도서 추가", &book)) return;
+    auto& books = doc_.articles[current_].books;
+    int sel = static_cast<int>(SendMessageW(bookList_, LB_GETCURSEL, 0, 0));
+    int index = sel >= 0 ? sel + 1 : static_cast<int>(books.size());  // 고른 도서 다음에 넣음
+    books.insert(books.begin() + index, book);
+    RefreshBookList(index);
+    ArticleChanged();
+}
+
+void MainWindow::EditBook() {
+    if (current_ < 0) return;
+    auto& books = doc_.articles[current_].books;
+    int sel = static_cast<int>(SendMessageW(bookList_, LB_GETCURSEL, 0, 0));
+    if (sel < 0 || sel >= static_cast<int>(books.size())) return;
+    nl::Book book = books[sel];
+    auto loader = [this](HWND owner, nl::Picture* p) { return LoadPictureFile(owner, L"표지 그림 고르기", p); };
+    if (!BookDialog::Run(hwnd_, instance_, uiFont_, dpi_, &images_, loader, L"도서 정보 수정", &book)) return;
+    books[sel] = book;
+    images_.Prune(doc_);
+    RefreshBookList(sel);
+    ArticleChanged();
+}
+
+void MainWindow::DeleteBook() {
+    if (current_ < 0) return;
+    auto& books = doc_.articles[current_].books;
+    int sel = static_cast<int>(SendMessageW(bookList_, LB_GETCURSEL, 0, 0));
+    if (sel < 0 || sel >= static_cast<int>(books.size())) return;
+    std::wstring message = L"『" + books[sel].title + L"』을(를) 목록에서 지울까요?";
+    if (MessageBoxW(hwnd_, message.c_str(), kAppName, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
+    books.erase(books.begin() + sel);
+    images_.Prune(doc_);
+    RefreshBookList(std::min(sel, static_cast<int>(books.size()) - 1));
+    ArticleChanged();
+}
+
+void MainWindow::MoveBook(int delta) {
+    if (current_ < 0) return;
+    auto& books = doc_.articles[current_].books;
+    int sel = static_cast<int>(SendMessageW(bookList_, LB_GETCURSEL, 0, 0));
+    int target = sel + delta;
+    if (sel < 0 || target < 0 || target >= static_cast<int>(books.size())) return;
+    std::swap(books[sel], books[target]);
+    RefreshBookList(target);
+    ArticleChanged();
+}
+
+// ---------------------------------------------------------------------------
+// 글자 크기·제목 배치
+
+HWND MainWindow::AddSizeCombo(int id, std::initializer_list<const wchar_t*> sizes) {
+    // 목록에서 고르거나 10.5처럼 직접 써 넣을 수 있는 크기 칸(pt)
+    HWND combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN,
+                                 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_,
+                                 nullptr);
+    SendMessageW(combo, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (const wchar_t* s : sizes) SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
+    SendMessageW(combo, CB_LIMITTEXT, 6, 0);
+    return combo;
+}
+
+void MainWindow::OnSizeChanged(int id, int code) {
+    HWND combo = id == IDC_HEADING_SIZE ? headingSize_ : id == IDC_BODY_SIZE ? bodySize_ : titleSize_;
+    int& target = id == IDC_HEADING_SIZE ? doc_.headingSize : id == IDC_BODY_SIZE ? doc_.bodySize : doc_.titleSize;
+    if (code == CBN_KILLFOCUS) {
+        // 칸을 떠날 때 잘못 써 넣은 값은 현재 크기로 되돌려 보여 줍니다.
+        SyncFormatControls();
+        return;
+    }
+    std::wstring text;
+    if (code == CBN_SELCHANGE) {
+        int sel = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+        if (sel < 0) return;
+        int len = static_cast<int>(SendMessageW(combo, CB_GETLBTEXTLEN, sel, 0));
+        text.assign(static_cast<size_t>(len) + 1, L'\0');
+        SendMessageW(combo, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(&text[0]));
+        text.resize(static_cast<size_t>(len));
+    } else {
+        text = GetText(combo);
+    }
+    int value = 0;
+    if (!nl::ParseFontSize(text, &value) || value == target) return;  // 입력 중인 값(빈칸 등)은 무시
+    target = value;
+    MarkDirty();
+    preview_.Refresh();
+}
+
+void MainWindow::SetTitleAlign(nl::TitleAlign align) {
+    if (doc_.titleAlign == align) return;
+    doc_.titleAlign = align;
+    MarkDirty();
+    preview_.Refresh();
+    SyncFormatControls();
+}
+
+// 문서의 글자 크기·제목 배치 값을 화면 칸에 보여 줍니다.
+void MainWindow::SyncFormatControls() {
+    bool wasLoading = loading_;
+    loading_ = true;
+    auto showSize = [](HWND combo, int halfPoints) {
+        std::wstring text = nl::FormatFontSize(halfPoints);
+        if (GetText(combo) != text) SetWindowTextW(combo, text.c_str());
+    };
+    // 입력 중인 칸은 건드리지 않아야 커서가 튀지 않습니다.
+    HWND focus = GetFocus();
+    if (!focus || GetParent(focus) != headingSize_) showSize(headingSize_, doc_.headingSize);
+    if (!focus || GetParent(focus) != bodySize_) showSize(bodySize_, doc_.bodySize);
+    if (!focus || GetParent(focus) != titleSize_) showSize(titleSize_, doc_.titleSize);
+    int align = doc_.titleAlign == nl::TitleAlign::Center ? 1 : doc_.titleAlign == nl::TitleAlign::Right ? 2 : 0;
+    SendMessageW(titleAlign_, CB_SETCURSEL, align, 0);
+    EnableWindow(titleReset_, doc_.titleOffsetX != 0 || doc_.titleOffsetY != 0);
+    loading_ = wasLoading;
+}
+
+// ---------------------------------------------------------------------------
+// 그림
+
+bool MainWindow::LoadPictureFile(HWND owner, const wchar_t* title, nl::Picture* picture) {
+    wchar_t file[MAX_PATH] = {};
+    OPENFILENAMEW ofn{sizeof(ofn)};
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = kImageFilter;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = title;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameW(&ofn)) return false;
+
+    std::string bytes;
+    if (!ReadFileBytes(file, bytes)) {
+        MessageBoxW(owner, (std::wstring(L"파일을 읽을 수 없습니다.\n") + file + L"\n\n" + LastErrorText()).c_str(),
+                    kAppName, MB_OK | MB_ICONERROR);
+        return false;
+    }
+    if (bytes.size() > kMaxPictureBytes) {
+        MessageBoxW(owner, L"그림 파일이 너무 큽니다(20MB 초과). 크기를 줄인 뒤 다시 넣어 주세요.", kAppName,
+                    MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    int pw = 0, ph = 0;
+    if (!ImageLibrary::ProbeSize(bytes, &pw, &ph)) {
+        MessageBoxW(owner, L"지원하지 않는 그림 형식입니다. PNG, JPG, GIF, BMP 파일을 골라 주세요.", kAppName,
+                    MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    picture->data = std::move(bytes);
+    picture->id = doc_.NextPictureId();
+    // 넣을 때 쓸 원본 비율. 실제 크기는 놓을 때 정해집니다.
+    picture->width = pw;
+    picture->height = ph;
+    return true;
+}
+
+void MainWindow::InsertLogo() {
+    preview_.CancelInteraction();
+    nl::Picture logo;
+    logo.kind = nl::Picture::Logo;
+    if (!LoadPictureFile(hwnd_, L"로고 그림 고르기", &logo)) return;
+    double aspect = static_cast<double>(logo.width) / logo.height;
+
+    // 이미 로고가 있으면 위치는 두고 그림만 바꿉니다.
+    for (size_t i = 0; i < doc_.pictures.size(); ++i) {
+        nl::Picture& p = doc_.pictures[i];
+        if (p.kind != nl::Picture::Logo) continue;
+        p.data = std::move(logo.data);
+        p.id = logo.id;
+        int right = p.x + p.width;
+        p.width = std::max(16, static_cast<int>(std::lround(p.height * aspect)));
+        p.x = std::max(0, right - p.width);
+        preview_.Refresh();
+        preview_.SelectPicture(static_cast<int>(i));
+        MarkDirty();
+        UpdateStatus();
+        return;
+    }
+
+    // 처음 넣는 로고는 제호 띠 오른쪽에 놓습니다. 제목 글자는 로고를 피해 배치됩니다.
+    int height = 96;
+    int width = static_cast<int>(std::lround(height * aspect));
+    if (width > 220) {
+        width = 220;
+        height = std::max(16, static_cast<int>(std::lround(width / aspect)));
+    }
+    logo.page = 0;
+    logo.width = width;
+    logo.height = height;
+    logo.x = nl::kMarginRight - 24 - width;
+    logo.y = nl::kContentTop + 18;
+    doc_.pictures.push_back(logo);
+    preview_.Refresh();
+    preview_.SelectPicture(static_cast<int>(doc_.pictures.size()) - 1);
+    MarkDirty();
+    UpdateStatus();
+}
+
+void MainWindow::InsertPhoto() {
+    preview_.CancelInteraction();
+    nl::Picture photo;
+    photo.kind = nl::Picture::Photo;
+    if (!LoadPictureFile(hwnd_, L"넣을 사진 고르기", &photo)) return;
+    // 실제 위치·크기는 사용자가 미리보기에서 영역을 끌어 정합니다.
+    preview_.BeginPlacing(photo);
+}
+
+void MainWindow::ReplacePicture() {
+    int index = preview_.SelectedPicture();
+    if (index < 0) return;
+    nl::Picture replacement;
+    if (!LoadPictureFile(hwnd_, L"바꿀 그림 고르기", &replacement)) return;
+    nl::Picture& p = doc_.pictures[index];
+    double aspect = static_cast<double>(replacement.width) / replacement.height;
+    p.data = std::move(replacement.data);
+    p.id = replacement.id;
+    p.height = std::max(16, static_cast<int>(std::lround(p.width / aspect)));  // 폭은 유지
+    images_.Prune(doc_);
+    preview_.Refresh();
+    MarkDirty();
+}
+
+// 쪽 배경 그림: 모든 쪽 배경, 또는 (미리보기에서 보고 있는/오른쪽 단추로 고른) 쪽만의 배경
+void MainWindow::EditBackground(bool allPages) {
+    preview_.CancelInteraction();
+    const int page = allPages ? -1 : preview_.CommandPage();
+    auto it = doc_.pageBackgrounds.find(page);
+    bool separate = !allPages && it != doc_.pageBackgrounds.end();
+    nl::Background bg = allPages ? doc_.background : (separate ? it->second : doc_.background);
+    auto loader = [this](HWND owner, nl::Picture* p) { return LoadPictureFile(owner, L"배경 그림 고르기", p); };
+    if (!BackgroundDialog::Run(hwnd_, instance_, uiFont_, dpi_, &images_, loader, page, &separate, &bg)) return;
+    if (allPages) doc_.background = bg;
+    else if (separate) doc_.pageBackgrounds[page] = bg;
+    else doc_.pageBackgrounds.erase(page);
+    images_.Prune(doc_);
+    MarkDirty();
+    preview_.Refresh();
+}
+
+void MainWindow::ShowBackgroundMenu() {
+    RECT rc;
+    GetWindowRect(backgroundButton_, &rc);
+    HMENU menu = CreatePopupMenu();
+    std::wstring pageItem = std::to_wstring(preview_.CommandPage() + 1) + L"쪽(지금 보는 쪽) 배경 그림...";
+    AppendMenuW(menu, MF_STRING, IDM_BACKGROUND_PAGE, pageItem.c_str());
+    AppendMenuW(menu, MF_STRING, IDM_BACKGROUND_ALL, L"모든 쪽 배경 그림...");
+    TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, hwnd_, nullptr);
+    DestroyMenu(menu);
+}
+
+void MainWindow::UpdatePictureCommands() {
+    int index = preview_.SelectedPicture();
+    bool has = index >= 0 && index < static_cast<int>(doc_.pictures.size());
+    EnableWindow(deletePictureButton_, has);
+    HMENU menu = GetMenu(hwnd_);
+    if (!menu) return;
+    for (int id : {IDM_PICTURE_REPLACE, IDM_PICTURE_ASPECT, IDM_PICTURE_WRAP, IDM_PICTURE_FRONT, IDM_PICTURE_BACK,
+                   IDM_PICTURE_DELETE})
+        EnableMenuItem(menu, id, MF_BYCOMMAND | (has ? MF_ENABLED : MF_GRAYED));
+    CheckMenuItem(menu, IDM_PICTURE_WRAP, MF_BYCOMMAND | (has && doc_.pictures[index].wrapText ? MF_CHECKED : 0));
+}
+
+// ---------------------------------------------------------------------------
+// 상태 표시
+
+void MainWindow::MarkDirty() {
+    if (dirty_) return;
+    dirty_ = true;
+    UpdateTitle();
+    UpdateStatus();
+}
+
+void MainWindow::SetClean() {
+    dirty_ = false;
+    UpdateTitle();
+    UpdateStatus();
+}
+
+void MainWindow::UpdateTitle() {
+    std::wstring name = path_.empty() ? L"제목 없음" : FileNameOf(path_);
+    std::wstring text = (dirty_ ? L"*" : L"") + name + L" - " + kAppName;
+    SetWindowTextW(hwnd_, text.c_str());
+}
+
+void MainWindow::UpdateStatus() {
+    if (!status_) return;
+    std::wstring state = dirty_ ? L"수정됨" : (path_.empty() ? L"새 문서" : L"저장됨");
+    std::wstring articles = L"기사 " + std::to_wstring(doc_.articles.size()) + L"개";
+    if (!doc_.pictures.empty()) articles += L" · 그림 " + std::to_wstring(doc_.pictures.size()) + L"개";
+    std::wstring pages = L"총 " + std::to_wstring(preview_.PageCount()) + L"쪽 (A4)";
+    std::wstring zoom = L"미리보기 " + std::to_wstring(preview_.ZoomPercent()) + L"%";
+    SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(state.c_str()));
+    SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(articles.c_str()));
+    SendMessageW(status_, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(pages.c_str()));
+    SendMessageW(status_, SB_SETTEXTW, 3, reinterpret_cast<LPARAM>(zoom.c_str()));
+}
+
+// ---------------------------------------------------------------------------
+// 메시지 처리
+
+void MainWindow::OnCommand(int id, int code, HWND control) {
+    if (control) {
+        if (loading_) return;
+        switch (id) {
+            case IDC_LIBRARY:
+            case IDC_ISSUE:
+            case IDC_TITLE:
+            case IDC_DATE:
+            case IDC_PUBLISHER:
+            case IDC_GREETING:
+                if (code == EN_CHANGE) OnInfoChanged(id);
+                return;
+            case IDC_THEME:
+            case IDC_HEADING_FONT:
+            case IDC_BODY_FONT:
+            case IDC_TITLE_ALIGN:
+                if (code == CBN_SELCHANGE) OnInfoChanged(id);
+                return;
+            case IDC_HEADING_SIZE:
+            case IDC_BODY_SIZE:
+            case IDC_TITLE_SIZE:
+                if (code == CBN_SELCHANGE || code == CBN_EDITCHANGE || code == CBN_KILLFOCUS) OnSizeChanged(id, code);
+                return;
+            case IDC_CATEGORY:
+                if (code == CBN_SELCHANGE || code == CBN_EDITCHANGE) OnArticleChanged(id, code);
+                return;
+            case IDC_ART_TITLE:
+            case IDC_BODY:
+                if (code == EN_CHANGE) OnArticleChanged(id, code);
+                return;
+            case IDC_ART_TITLE_FONT:
+            case IDC_ART_TITLE_ALIGN:
+                if (code == CBN_SELCHANGE) OnArticleFormatChanged(id, code);
+                return;
+            case IDC_ART_TITLE_SIZE:
+                if (code == CBN_SELCHANGE || code == CBN_EDITCHANGE || code == CBN_KILLFOCUS)
+                    OnArticleFormatChanged(id, code);
+                return;
+            case IDC_ART_TITLE_BOLD:
+            case IDC_ART_PAGE_BREAK:
+            case IDC_BOOK_COLS1:
+            case IDC_BOOK_COLS2:
+                if (code == BN_CLICKED) OnArticleFormatChanged(id, code);
+                return;
+            case IDC_BOOK_LIST:
+                if (code == LBN_SELCHANGE) UpdateBookButtons();
+                else if (code == LBN_DBLCLK) EditBook();
+                return;
+            case IDC_ARTICLE_LIST:
+                if (code == LBN_SELCHANGE) {
+                    int sel = static_cast<int>(SendMessageW(list_, LB_GETCURSEL, 0, 0));
+                    if (sel != LB_ERR) SelectArticle(sel);
+                }
+                return;
+            case IDC_TODAY:
+                if (code == BN_CLICKED) SetWindowTextW(date_, nl::TodayString().c_str());
+                return;
+        }
+        if (code != BN_CLICKED) return;
+    }
+
+    switch (id) {
+        case IDM_NEW:
+            if (ConfirmDiscard()) NewDocument(false);
+            break;
+        case IDM_NEW_SAMPLE:
+            if (ConfirmDiscard()) NewDocument(true);
+            break;
+        case IDM_OPEN: Open(); break;
+        case IDM_SAVE: Save(); break;
+        case IDM_SAVE_AS: SaveAs(); break;
+        case IDM_EXPORT_HTML: ExportHtml(); break;
+        case IDM_PRINT: Print(); break;
+        case IDM_EXIT: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
+        case IDM_ADD_ARTICLE: AddArticle(false); break;
+        case IDM_DUPLICATE_ARTICLE: AddArticle(true); break;
+        case IDM_DELETE_ARTICLE: DeleteArticle(); break;
+        case IDM_MOVE_UP: MoveArticle(-1); break;
+        case IDM_MOVE_DOWN: MoveArticle(+1); break;
+        case IDM_INSERT_LOGO: InsertLogo(); break;
+        case IDC_BACKGROUND_BUTTON: ShowBackgroundMenu(); break;
+        case IDM_BACKGROUND_PAGE: EditBackground(false); break;
+        case IDM_BACKGROUND_ALL: EditBackground(true); break;
+        case IDM_INSERT_PHOTO: InsertPhoto(); break;
+        case IDM_PICTURE_REPLACE: ReplacePicture(); break;
+        case IDM_PICTURE_ASPECT: preview_.ResetAspectRatio(); break;
+        case IDM_PICTURE_WRAP: preview_.ToggleWrap(); break;
+        case IDM_PICTURE_FRONT: preview_.BringToFront(); break;
+        case IDM_PICTURE_BACK: preview_.SendToBack(); break;
+        case IDM_PICTURE_DELETE: preview_.DeleteSelected(); break;
+        case IDCANCEL: preview_.CancelInteraction(); break;  // Esc
+        case IDM_TITLE_ALIGN_LEFT: SetTitleAlign(nl::TitleAlign::Left); break;
+        case IDM_TITLE_ALIGN_CENTER: SetTitleAlign(nl::TitleAlign::Center); break;
+        case IDM_TITLE_ALIGN_RIGHT: SetTitleAlign(nl::TitleAlign::Right); break;
+        case IDM_TITLE_RESET:
+            if (doc_.titleOffsetX || doc_.titleOffsetY) {
+                doc_.titleOffsetX = doc_.titleOffsetY = 0;
+                MarkDirty();
+                preview_.Refresh();
+                SyncFormatControls();
+            }
+            break;
+        case IDM_INSERT_PAGE_BREAK: InsertPageBreak(); break;
+        case IDM_BOOK_ADD: AddBook(); break;
+        case IDM_BOOK_EDIT: EditBook(); break;
+        case IDM_BOOK_DELETE: DeleteBook(); break;
+        case IDM_BOOK_UP: MoveBook(-1); break;
+        case IDM_BOOK_DOWN: MoveBook(+1); break;
+        case IDM_ZOOM_IN: preview_.ZoomIn(); break;
+        case IDM_ZOOM_OUT: preview_.ZoomOut(); break;
+        case IDM_ZOOM_FIT: preview_.ZoomFit(); break;
+        case IDM_ABOUT:
+            MessageBoxW(hwnd_,
+                        L"도서관 소식지 편집기 1.0\n\n"
+                        L"도서관 소식지(뉴스레터)를 작성하고, 미리보기·인쇄·HTML 내보내기를 할 수 있습니다.\n\n"
+                        L"· 왼쪽에서 소식지 정보와 기사를 입력하면 오른쪽 미리보기에 바로 반영됩니다.\n"
+                        L"· 본문에서 \"- \"로 시작하는 줄은 글머리표 목록이 됩니다.\n"
+                        L"· [로고 넣기]·[사진 추가]로 그림을 넣고, 미리보기에서 끌어 옮기거나 손잡이로 크기를 바꿉니다.\n"
+                        L"· Ctrl+마우스 휠로 미리보기를 확대/축소할 수 있습니다.",
+                        kAppName, MB_OK | MB_ICONINFORMATION);
+            break;
+    }
+}
+
+LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    MainWindow* self;
+    if (msg == WM_NCCREATE) {
+        self = static_cast<MainWindow*>(reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams);
+        self->hwnd_ = hwnd;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+    } else {
+        self = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    }
+    if (self) return self->HandleMessage(msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CREATE:
+            CreateControls();
+            CreateMenuBar();
+            LayoutControls();
+            return 0;
+        case WM_SIZE:
+            LayoutControls();
+            return 0;
+        case WM_GETMINMAXINFO: {
+            auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+            info->ptMinTrackSize.x = S(900);
+            info->ptMinTrackSize.y = S(700);
+            return 0;
+        }
+        case WM_COMMAND:
+            OnCommand(LOWORD(wParam), HIWORD(wParam), reinterpret_cast<HWND>(lParam));
+            return 0;
+        case WM_NOTIFY: {
+            auto* header = reinterpret_cast<const NMHDR*>(lParam);
+            if (header->hwndFrom == articleTabs_ && header->code == TCN_SELCHANGE) {
+                ShowArticleTab(static_cast<int>(SendMessageW(articleTabs_, TCM_GETCURSEL, 0, 0)));
+                return 0;
+            }
+            break;
+        }
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN: {
+            // 탭 안의 글자·확인란은 탭 바탕(창 색)과 같은 색으로 그립니다.
+            HWND control = reinterpret_cast<HWND>(lParam);
+            for (const auto& pageControls : tabPages_) {
+                if (std::find(pageControls.begin(), pageControls.end(), control) == pageControls.end()) continue;
+                HDC dc = reinterpret_cast<HDC>(wParam);
+                SetBkColor(dc, GetSysColor(COLOR_WINDOW));
+                SetTextColor(dc, GetSysColor(IsWindowEnabled(control) ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
+                return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+            }
+            break;
+        }
+        case WM_MEASUREITEM: {
+            auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+            if (item->CtlType != ODT_COMBOBOX) break;
+            item->itemHeight = S(22);
+            return TRUE;
+        }
+        case WM_DRAWITEM: {
+            auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+            if (item->CtlID != IDC_HEADING_FONT && item->CtlID != IDC_BODY_FONT && item->CtlID != IDC_ART_TITLE_FONT)
+                break;
+            DrawFontItem(item);
+            return TRUE;
+        }
+        case WM_APP_DOC_EDITED:
+            images_.Prune(doc_);  // 지운 그림의 캐시 정리
+            SyncFormatControls();  // 미리보기에서 제목을 옮겼으면 [위치 처음대로] 단추 상태 갱신
+            MarkDirty();
+            UpdateStatus();
+            UpdatePictureCommands();
+            return 0;
+        case WM_APP_PREVIEW_CHANGED:
+            UpdatePictureCommands();
+            UpdateStatus();
+            return 0;
+        case WM_DROPFILES: {
+            HDROP drop = reinterpret_cast<HDROP>(wParam);
+            wchar_t file[MAX_PATH];
+            bool got = DragQueryFileW(drop, 0, file, MAX_PATH) > 0;
+            DragFinish(drop);
+            if (got && ConfirmDiscard()) OpenPath(file);
+            return 0;
+        }
+        case WM_CLOSE:
+            if (ConfirmDiscard()) DestroyWindow(hwnd_);
+            return 0;
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+    }
+    return DefWindowProcW(hwnd_, msg, wParam, lParam);
+}
