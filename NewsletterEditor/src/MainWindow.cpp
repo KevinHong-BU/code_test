@@ -17,6 +17,9 @@ const wchar_t kClassName[] = L"LibraryNewsletterEditor";
 const wchar_t kAppName[] = L"도서관 소식지 편집기";
 const wchar_t kFileFilter[] = L"도서관 소식지 (*.lnews)\0*.lnews\0모든 파일 (*.*)\0*.*\0";
 const wchar_t kHtmlFilter[] = L"HTML 문서 (*.html)\0*.html;*.htm\0모든 파일 (*.*)\0*.*\0";
+const wchar_t kImageFilter[] =
+    L"그림 파일 (*.png;*.jpg;*.jpeg;*.gif;*.bmp)\0*.png;*.jpg;*.jpeg;*.gif;*.bmp\0모든 파일 (*.*)\0*.*\0";
+const size_t kMaxPictureBytes = 20 * 1024 * 1024;
 
 std::wstring GetText(HWND control) {
     int len = GetWindowTextLengthW(control);
@@ -246,6 +249,13 @@ void MainWindow::CreateControls() {
     infoGroup_ = group(L"소식지 정보");
     articleGroup_ = group(L"기사");
 
+    // 미리보기 위 그림 도구 줄
+    logoButton_ = AddButton(IDM_INSERT_LOGO, L"로고 넣기");
+    photoButton_ = AddButton(IDM_INSERT_PHOTO, L"사진 추가");
+    deletePictureButton_ = AddButton(IDM_PICTURE_DELETE, L"그림 삭제");
+    pictureHint_ = AddLabel(L"그림은 끌어서 옮기고, 모서리·변의 손잡이로 크기를 바꿉니다. 오른쪽 단추: 그림 메뉴",
+                            SS_ENDELLIPSIS);
+
     preview_.Create(hwnd_, IDC_PREVIEW, instance_);
 
     status_ = CreateWindowExW(0, STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, hwnd_,
@@ -280,12 +290,25 @@ void MainWindow::CreateMenuBar() {
     AppendMenuW(view, MF_STRING, IDM_ZOOM_OUT, L"축소(&O)\tCtrl+-");
     AppendMenuW(view, MF_STRING, IDM_ZOOM_FIT, L"너비에 맞춤(&F)\tCtrl+0");
 
+    HMENU insert = CreatePopupMenu();
+    AppendMenuW(insert, MF_STRING, IDM_INSERT_LOGO, L"로고 넣기(&L)...");
+    AppendMenuW(insert, MF_STRING, IDM_INSERT_PHOTO, L"사진 추가(&P)...");
+    AppendMenuW(insert, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_REPLACE, L"그림 바꾸기(&R)...");
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_ASPECT, L"원래 비율로 맞추기(&O)");
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_WRAP, L"글이 그림을 피해 가기(&W)");
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_FRONT, L"맨 앞으로 가져오기(&F)");
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_BACK, L"맨 뒤로 보내기(&B)");
+    AppendMenuW(insert, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(insert, MF_STRING, IDM_PICTURE_DELETE, L"그림 삭제(&D)\tDel");
+
     HMENU help = CreatePopupMenu();
     AppendMenuW(help, MF_STRING, IDM_ABOUT, L"정보(&A)...");
 
     HMENU bar = CreateMenu();
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"파일(&F)");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(edit), L"편집(&E)");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(insert), L"삽입(&I)");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"보기(&V)");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"도움말(&H)");
     SetMenu(hwnd_, bar);
@@ -367,8 +390,17 @@ void MainWindow::LayoutControls() {
     place(bodyHint_, il + labelW, groupBottom - S(12) - hintH, ir - il - labelW, hintH);
     place(articleGroup_, pad, groupTop, panelW - pad, groupBottom - groupTop);
 
-    // 미리보기
-    place(preview_.hwnd(), panelW + pad, pad, client.right - panelW - 2 * pad, bottom - pad);
+    // 그림 도구 줄 + 미리보기
+    const int previewLeft = panelW + pad;
+    const int toolH = S(28);
+    int bx = previewLeft;
+    for (HWND b : {logoButton_, photoButton_, deletePictureButton_}) {
+        place(b, bx, pad, S(86), toolH);
+        bx += S(86) + S(6);
+    }
+    place(pictureHint_, bx + S(6), pad, client.right - pad - bx - S(6), toolH);
+    const int previewTop = pad + toolH + S(8);
+    place(preview_.hwnd(), previewLeft, previewTop, client.right - panelW - 2 * pad, bottom - previewTop);
 
     EndDeferWindowPos(dwp);
 }
@@ -393,7 +425,8 @@ void MainWindow::LoadDocumentToUi() {
 
     current_ = -1;
     SelectArticle(doc_.articles.empty() ? -1 : 0);
-    preview_.SetDocument(&doc_);
+    images_.Prune(doc_);
+    preview_.SetDocument(&doc_, &images_);
     UpdateStatus();
 }
 
@@ -622,6 +655,7 @@ bool MainWindow::SaveAs() {
     if (!WriteDocument(file)) return false;
     path_ = file;
     UpdateTitle();
+    UpdateStatus();
     return true;
 }
 
@@ -660,7 +694,12 @@ void MainWindow::ExportHtml() {
     ofn.lpstrTitle = L"HTML로 내보내기";
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOREADONLYRETURN;
     if (!GetSaveFileNameW(&ofn)) return;
-    if (!WriteFileBytes(file, nl::ExportHtml(doc_))) {
+    // 쪽 위 사진 위치로부터 HTML에서 어느 기사 옆에 띄울지 정합니다.
+    nl::Newsletter exported = doc_;
+    nl::Renderer layout;
+    layout.Layout(exported);
+    for (nl::Picture& p : exported.pictures) p.anchor = layout.AnchorFor(p.page, p.y + p.height / 2);
+    if (!WriteFileBytes(file, nl::ExportHtml(exported))) {
         MessageBoxW(hwnd_, (std::wstring(L"내보내지 못했습니다.\n") + file + L"\n\n" + LastErrorText()).c_str(),
                     kAppName, MB_OK | MB_ICONERROR);
         return;
@@ -712,7 +751,7 @@ void MainWindow::Print() {
         int offsetY = static_cast<int>((printableH - nl::kPageHeight * scale) / 2);
         nl::SetupPageMapping(dc, scale);
         SetViewportOrgEx(dc, offsetX, offsetY, nullptr);
-        renderer.DrawPage(dc, page);
+        renderer.DrawPage(dc, page, doc_, &images_, true);
         ok = EndPage(dc) > 0;
     }
     if (ok) EndDoc(dc);
@@ -722,6 +761,123 @@ void MainWindow::Print() {
     if (pd.hDevMode) GlobalFree(pd.hDevMode);
     if (pd.hDevNames) GlobalFree(pd.hDevNames);
     if (!ok) MessageBoxW(hwnd_, L"인쇄하는 중에 오류가 발생했습니다.", kAppName, MB_OK | MB_ICONERROR);
+}
+
+// ---------------------------------------------------------------------------
+// 그림
+
+bool MainWindow::LoadPictureFile(const wchar_t* title, nl::Picture* picture) {
+    wchar_t file[MAX_PATH] = {};
+    OPENFILENAMEW ofn{sizeof(ofn)};
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = kImageFilter;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = title;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameW(&ofn)) return false;
+
+    std::string bytes;
+    if (!ReadFileBytes(file, bytes)) {
+        MessageBoxW(hwnd_, (std::wstring(L"파일을 읽을 수 없습니다.\n") + file + L"\n\n" + LastErrorText()).c_str(),
+                    kAppName, MB_OK | MB_ICONERROR);
+        return false;
+    }
+    if (bytes.size() > kMaxPictureBytes) {
+        MessageBoxW(hwnd_, L"그림 파일이 너무 큽니다(20MB 초과). 크기를 줄인 뒤 다시 넣어 주세요.", kAppName,
+                    MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    int pw = 0, ph = 0;
+    if (!ImageLibrary::ProbeSize(bytes, &pw, &ph)) {
+        MessageBoxW(hwnd_, L"지원하지 않는 그림 형식입니다. PNG, JPG, GIF, BMP 파일을 골라 주세요.", kAppName,
+                    MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    picture->data = std::move(bytes);
+    picture->id = doc_.NextPictureId();
+    // 넣을 때 쓸 원본 비율. 실제 크기는 놓을 때 정해집니다.
+    picture->width = pw;
+    picture->height = ph;
+    return true;
+}
+
+void MainWindow::InsertLogo() {
+    preview_.CancelInteraction();
+    nl::Picture logo;
+    logo.kind = nl::Picture::Logo;
+    if (!LoadPictureFile(L"로고 그림 고르기", &logo)) return;
+    double aspect = static_cast<double>(logo.width) / logo.height;
+
+    // 이미 로고가 있으면 위치는 두고 그림만 바꿉니다.
+    for (size_t i = 0; i < doc_.pictures.size(); ++i) {
+        nl::Picture& p = doc_.pictures[i];
+        if (p.kind != nl::Picture::Logo) continue;
+        p.data = std::move(logo.data);
+        p.id = logo.id;
+        int right = p.x + p.width;
+        p.width = std::max(16, static_cast<int>(std::lround(p.height * aspect)));
+        p.x = std::max(0, right - p.width);
+        preview_.Refresh();
+        preview_.SelectPicture(static_cast<int>(i));
+        MarkDirty();
+        UpdateStatus();
+        return;
+    }
+
+    // 처음 넣는 로고는 제호 띠 오른쪽에 놓습니다. 제목 글자는 로고를 피해 배치됩니다.
+    int height = 96;
+    int width = static_cast<int>(std::lround(height * aspect));
+    if (width > 220) {
+        width = 220;
+        height = std::max(16, static_cast<int>(std::lround(width / aspect)));
+    }
+    logo.page = 0;
+    logo.width = width;
+    logo.height = height;
+    logo.x = nl::kMarginRight - 24 - width;
+    logo.y = nl::kContentTop + 18;
+    doc_.pictures.push_back(logo);
+    preview_.Refresh();
+    preview_.SelectPicture(static_cast<int>(doc_.pictures.size()) - 1);
+    MarkDirty();
+    UpdateStatus();
+}
+
+void MainWindow::InsertPhoto() {
+    preview_.CancelInteraction();
+    nl::Picture photo;
+    photo.kind = nl::Picture::Photo;
+    if (!LoadPictureFile(L"넣을 사진 고르기", &photo)) return;
+    // 실제 위치·크기는 사용자가 미리보기에서 영역을 끌어 정합니다.
+    preview_.BeginPlacing(photo);
+}
+
+void MainWindow::ReplacePicture() {
+    int index = preview_.SelectedPicture();
+    if (index < 0) return;
+    nl::Picture replacement;
+    if (!LoadPictureFile(L"바꿀 그림 고르기", &replacement)) return;
+    nl::Picture& p = doc_.pictures[index];
+    double aspect = static_cast<double>(replacement.width) / replacement.height;
+    p.data = std::move(replacement.data);
+    p.id = replacement.id;
+    p.height = std::max(16, static_cast<int>(std::lround(p.width / aspect)));  // 폭은 유지
+    images_.Prune(doc_);
+    preview_.Refresh();
+    MarkDirty();
+}
+
+void MainWindow::UpdatePictureCommands() {
+    int index = preview_.SelectedPicture();
+    bool has = index >= 0 && index < static_cast<int>(doc_.pictures.size());
+    EnableWindow(deletePictureButton_, has);
+    HMENU menu = GetMenu(hwnd_);
+    if (!menu) return;
+    for (int id : {IDM_PICTURE_REPLACE, IDM_PICTURE_ASPECT, IDM_PICTURE_WRAP, IDM_PICTURE_FRONT, IDM_PICTURE_BACK,
+                   IDM_PICTURE_DELETE})
+        EnableMenuItem(menu, id, MF_BYCOMMAND | (has ? MF_ENABLED : MF_GRAYED));
+    CheckMenuItem(menu, IDM_PICTURE_WRAP, MF_BYCOMMAND | (has && doc_.pictures[index].wrapText ? MF_CHECKED : 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -750,6 +906,7 @@ void MainWindow::UpdateStatus() {
     if (!status_) return;
     std::wstring state = dirty_ ? L"수정됨" : (path_.empty() ? L"새 문서" : L"저장됨");
     std::wstring articles = L"기사 " + std::to_wstring(doc_.articles.size()) + L"개";
+    if (!doc_.pictures.empty()) articles += L" · 그림 " + std::to_wstring(doc_.pictures.size()) + L"개";
     std::wstring pages = L"총 " + std::to_wstring(preview_.PageCount()) + L"쪽 (A4)";
     std::wstring zoom = L"미리보기 " + std::to_wstring(preview_.ZoomPercent()) + L"%";
     SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(state.c_str()));
@@ -814,6 +971,15 @@ void MainWindow::OnCommand(int id, int code, HWND control) {
         case IDM_DELETE_ARTICLE: DeleteArticle(); break;
         case IDM_MOVE_UP: MoveArticle(-1); break;
         case IDM_MOVE_DOWN: MoveArticle(+1); break;
+        case IDM_INSERT_LOGO: InsertLogo(); break;
+        case IDM_INSERT_PHOTO: InsertPhoto(); break;
+        case IDM_PICTURE_REPLACE: ReplacePicture(); break;
+        case IDM_PICTURE_ASPECT: preview_.ResetAspectRatio(); break;
+        case IDM_PICTURE_WRAP: preview_.ToggleWrap(); break;
+        case IDM_PICTURE_FRONT: preview_.BringToFront(); break;
+        case IDM_PICTURE_BACK: preview_.SendToBack(); break;
+        case IDM_PICTURE_DELETE: preview_.DeleteSelected(); break;
+        case IDCANCEL: preview_.CancelInteraction(); break;  // Esc
         case IDM_ZOOM_IN: preview_.ZoomIn(); break;
         case IDM_ZOOM_OUT: preview_.ZoomOut(); break;
         case IDM_ZOOM_FIT: preview_.ZoomFit(); break;
@@ -823,6 +989,7 @@ void MainWindow::OnCommand(int id, int code, HWND control) {
                         L"도서관 소식지(뉴스레터)를 작성하고, 미리보기·인쇄·HTML 내보내기를 할 수 있습니다.\n\n"
                         L"· 왼쪽에서 소식지 정보와 기사를 입력하면 오른쪽 미리보기에 바로 반영됩니다.\n"
                         L"· 본문에서 \"- \"로 시작하는 줄은 글머리표 목록이 됩니다.\n"
+                        L"· [로고 넣기]·[사진 추가]로 그림을 넣고, 미리보기에서 끌어 옮기거나 손잡이로 크기를 바꿉니다.\n"
                         L"· Ctrl+마우스 휠로 미리보기를 확대/축소할 수 있습니다.",
                         kAppName, MB_OK | MB_ICONINFORMATION);
             break;
@@ -861,7 +1028,14 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_COMMAND:
             OnCommand(LOWORD(wParam), HIWORD(wParam), reinterpret_cast<HWND>(lParam));
             return 0;
+        case WM_APP_DOC_EDITED:
+            images_.Prune(doc_);  // 지운 그림의 캐시 정리
+            MarkDirty();
+            UpdateStatus();
+            UpdatePictureCommands();
+            return 0;
         case WM_APP_PREVIEW_CHANGED:
+            UpdatePictureCommands();
             UpdateStatus();
             return 0;
         case WM_DROPFILES: {

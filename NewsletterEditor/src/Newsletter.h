@@ -15,6 +15,20 @@ struct Article {
     std::wstring body;
 };
 
+// 쪽 위에 자유롭게 놓는 그림(로고·사진).
+// 위치와 크기는 쪽 좌표(논리 단위, 한 쪽 = 800 x 1131)로 저장합니다.
+struct Picture {
+    enum Kind { Photo, Logo };
+    Kind kind = Photo;
+    int id = 0;            // 문서 안에서 고유한 번호(그림 캐시 키)
+    std::string data;      // 원본 그림 파일 내용(PNG, JPEG, GIF, BMP)
+    int page = 0;          // 0부터 시작하는 쪽 번호
+    int x = 0, y = 0;      // 쪽 왼쪽 위 기준 위치
+    int width = 0, height = 0;
+    bool wrapText = true;  // true면 본문 글자가 그림을 피해 배치됨
+    int anchor = -1;       // HTML 내보내기용 기준 기사 번호(-1이면 맨 위). 파일에 저장하지 않음.
+};
+
 struct Newsletter {
     std::wstring libraryName;  // 도서관 이름
     std::wstring title;        // 소식지 제목
@@ -24,6 +38,9 @@ struct Newsletter {
     std::wstring greeting;     // 머리말
     int theme = 0;             // 색상 테마 번호
     std::vector<Article> articles;
+    std::vector<Picture> pictures;  // 뒤에 있을수록 위에 그려짐
+
+    int NextPictureId() const;
 };
 
 struct Color {
@@ -59,6 +76,13 @@ std::vector<BodyLine> ParseBody(const std::wstring& body);
 std::wstring Trim(const std::wstring& s);
 std::wstring NormalizeNewlines(const std::wstring& s);  // "\r\n", "\r" -> "\n"
 std::wstring ToCrLf(const std::wstring& s);             // "\n" -> "\r\n"
+
+std::string Base64Encode(const std::string& bytes);
+bool Base64Decode(const std::string& text, std::string& out);
+// 그림 파일 형식의 MIME 형식("image/png" 등). 알 수 없으면 빈 문자열.
+std::string ImageMimeType(const std::string& data);
+// JPEG의 EXIF 방향 값(1~8). 정보가 없거나 JPEG가 아니면 1(회전 없음).
+int JpegOrientation(const std::string& data);
 
 std::string ToUtf8(const std::wstring& s);
 std::wstring FromUtf8(const std::string& s);

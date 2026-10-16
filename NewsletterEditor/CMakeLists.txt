@@ -23,6 +23,7 @@ if(WIN32)
         src/MainWindow.cpp
         src/PreviewWindow.cpp
         src/Renderer.cpp
+        src/ImageLibrary.cpp
         res/NewsletterEditor.rc)
     if(MSVC)
         # MSVC 링커가 매니페스트를 넣습니다(.rc에서는 MinGW일 때만 넣음).
@@ -30,7 +31,7 @@ if(WIN32)
     endif()
     add_executable(NewsletterEditor WIN32 ${APP_SOURCES})
     target_compile_definitions(NewsletterEditor PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(NewsletterEditor PRIVATE newsletter_core comctl32 comdlg32 gdi32 shell32)
+    target_link_libraries(NewsletterEditor PRIVATE newsletter_core comctl32 comdlg32 gdi32 gdiplus ole32 shell32)
     if(MINGW)
         target_link_options(NewsletterEditor PRIVATE -municode -static)
     endif()

@@ -5,6 +5,7 @@
 
 #include <string>
 
+#include "ImageLibrary.h"
 #include "Newsletter.h"
 #include "PreviewWindow.h"
 
@@ -48,6 +49,13 @@ private:
     void DeleteArticle();
     void MoveArticle(int delta);
 
+    // 그림
+    bool LoadPictureFile(const wchar_t* title, nl::Picture* picture);
+    void InsertLogo();
+    void InsertPhoto();
+    void ReplacePicture();
+    void UpdatePictureCommands();
+
     // 파일
     bool ConfirmDiscard();
     bool Save();
@@ -75,6 +83,7 @@ private:
     bool loading_ = false;  // 프로그램이 컨트롤 값을 채우는 중에는 변경 알림을 무시
     int current_ = -1;      // 선택된 기사 번호
 
+    ImageLibrary images_;  // GdiplusStartup 이후에 만들어져야 함(main.cpp)
     PreviewWindow preview_;
 
     HWND infoGroup_ = nullptr, articleGroup_ = nullptr;
@@ -91,5 +100,6 @@ private:
     HWND categoryLabel_ = nullptr, category_ = nullptr;
     HWND articleTitleLabel_ = nullptr, articleTitle_ = nullptr;
     HWND bodyLabel_ = nullptr, body_ = nullptr, bodyHint_ = nullptr;
+    HWND logoButton_ = nullptr, photoButton_ = nullptr, deletePictureButton_ = nullptr, pictureHint_ = nullptr;
     HWND status_ = nullptr;
 };

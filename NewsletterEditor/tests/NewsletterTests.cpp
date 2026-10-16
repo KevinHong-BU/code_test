@@ -33,7 +33,157 @@ bool Equal(const nl::Newsletter& a, const nl::Newsletter& b) {
         const auto& y = b.articles[i];
         if (x.category != y.category || x.title != y.title || x.body != y.body) return false;
     }
+    if (a.pictures.size() != b.pictures.size()) return false;
+    for (size_t i = 0; i < a.pictures.size(); ++i) {
+        const auto& x = a.pictures[i];
+        const auto& y = b.pictures[i];
+        if (x.kind != y.kind || x.data != y.data || x.page != y.page || x.x != y.x || x.y != y.y ||
+            x.width != y.width || x.height != y.height || x.wrapText != y.wrapText)
+            return false;
+    }
     return true;
+}
+
+// 8바이트 PNG 서명 + 임의 바이트(0과 0xFF 포함)로 된 가짜 그림 데이터
+std::string FakePng() {
+    std::string data("\x89PNG\r\n\x1a\n", 8);
+    for (int i = 0; i < 300; ++i) data += static_cast<char>(i * 37);
+    return data;
+}
+
+void TestBase64() {
+    CHECK(nl::Base64Encode("") == "");
+    CHECK(nl::Base64Encode("f") == "Zg==");
+    CHECK(nl::Base64Encode("fo") == "Zm8=");
+    CHECK(nl::Base64Encode("foo") == "Zm9v");
+    CHECK(nl::Base64Encode("foobar") == "Zm9vYmFy");
+    std::string out;
+    CHECK(nl::Base64Decode("Zm9vYmE=", out) && out == "fooba");
+    CHECK(nl::Base64Decode("Zm9v\nYmFy", out) && out == "foobar");
+    CHECK(!nl::Base64Decode("Zm9v*", out));
+    CHECK(!nl::Base64Decode("Zg==Zg", out));
+    std::string bin = FakePng();
+    CHECK(nl::Base64Decode(nl::Base64Encode(bin), out) && out == bin);
+}
+
+void TestMimeType() {
+    CHECK(nl::ImageMimeType(FakePng()) == "image/png");
+    CHECK(nl::ImageMimeType(std::string("\xFF\xD8\xFF\xE0rest", 8)) == "image/jpeg");
+    CHECK(nl::ImageMimeType("GIF89a...") == "image/gif");
+    CHECK(nl::ImageMimeType("BM....") == "image/bmp");
+    CHECK(nl::ImageMimeType("hello").empty());
+}
+
+// 방향 태그 하나만 든 최소 EXIF JPEG를 만듭니다.
+std::string ExifJpeg(bool little, int orientation) {
+    auto put = [little](std::string& out, unsigned long v, int bytes) {
+        for (int i = 0; i < bytes; ++i) {
+            int shift = little ? 8 * i : 8 * (bytes - 1 - i);
+            out += static_cast<char>((v >> shift) & 0xFF);
+        }
+    };
+    std::string tiff = little ? "II" : "MM";
+    put(tiff, 42, 2);
+    put(tiff, 8, 4);       // 첫 IFD 위치
+    put(tiff, 1, 2);       // 항목 1개
+    put(tiff, 0x0112, 2);  // 방향 태그
+    put(tiff, 3, 2);       // SHORT
+    put(tiff, 1, 4);       // 개수
+    put(tiff, static_cast<unsigned long>(orientation), 2);
+    put(tiff, 0, 2);       // 값 칸 나머지
+    put(tiff, 0, 4);       // 다음 IFD 없음
+    std::string app1 = std::string("Exif\0\0", 6) + tiff;
+    size_t len = app1.size() + 2;
+    std::string jpeg("\xFF\xD8\xFF\xE0\0\x04\0\0", 8);  // 짧은 APP0 구획을 먼저 둠
+    jpeg += std::string("\xFF\xE1", 2) + static_cast<char>(len >> 8) + static_cast<char>(len & 0xFF) + app1;
+    jpeg += std::string("\xFF\xD9", 2);
+    return jpeg;
+}
+
+void TestJpegOrientation() {
+    CHECK(nl::JpegOrientation(ExifJpeg(true, 6)) == 6);
+    CHECK(nl::JpegOrientation(ExifJpeg(false, 8)) == 8);
+    CHECK(nl::JpegOrientation(ExifJpeg(false, 3)) == 3);
+    CHECK(nl::JpegOrientation(ExifJpeg(true, 42)) == 1);  // 잘못된 값
+    CHECK(nl::JpegOrientation(FakePng()) == 1);
+    CHECK(nl::JpegOrientation(std::string("\xFF\xD8\xFF\xE1\0", 5)) == 1);  // 잘린 파일
+    std::string truncated = ExifJpeg(true, 6);
+    truncated.resize(truncated.size() / 2);
+    int value = nl::JpegOrientation(truncated);
+    CHECK(value >= 1 && value <= 8);
+}
+
+void TestPictures() {
+    nl::Newsletter doc = nl::CreateSample();
+    nl::Picture logo;
+    logo.kind = nl::Picture::Logo;
+    logo.id = doc.NextPictureId();
+    logo.data = FakePng();
+    logo.x = 500;
+    logo.y = 70;
+    logo.width = 160;
+    logo.height = 90;
+    doc.pictures.push_back(logo);
+    nl::Picture photo = logo;
+    photo.kind = nl::Picture::Photo;
+    photo.id = doc.NextPictureId();
+    photo.page = 1;
+    photo.x = 60;
+    photo.wrapText = false;
+    doc.pictures.push_back(photo);
+    CHECK(photo.id == 2);
+
+    std::string data = nl::Serialize(doc);
+    CHECK(Contains(data, "format=2"));
+    nl::Newsletter loaded;
+    std::wstring error;
+    CHECK(nl::Deserialize(data, loaded, error));
+    CHECK(Equal(doc, loaded));
+    CHECK(loaded.pictures.size() == 2 && loaded.pictures[0].id != loaded.pictures[1].id);
+
+    // 손상된 그림 데이터는 오류로 알립니다.
+    std::string broken = data;
+    size_t at = broken.find("data=");
+    broken.insert(at + 5, "*");
+    CHECK(!nl::Deserialize(broken, loaded, error));
+    CHECK(!error.empty());
+
+    // 크기가 없는 그림은 버립니다.
+    error.clear();
+    CHECK(nl::Deserialize("[newsletter]\nformat=2\n[picture]\nkind=photo\nwidth=0\nheight=10\ndata=Zm9v\n", loaded,
+                          error));
+    CHECK(loaded.pictures.empty());
+
+    // 그림 기능 이전(format=1) 파일도 그대로 열립니다.
+    CHECK(nl::Deserialize("[newsletter]\nformat=1\ntitle=T\n[article]\ntitle=A\n", loaded, error));
+    CHECK(loaded.articles.size() == 1 && loaded.pictures.empty());
+}
+
+void TestHtmlPictures() {
+    nl::Newsletter doc = nl::CreateBlank();
+    doc.articles = {{L"공지사항", L"첫 기사", L"본문"}, {L"기타", L"둘째 기사", L"본문"}};
+    nl::Picture logo;
+    logo.kind = nl::Picture::Logo;
+    logo.data = FakePng();
+    logo.width = 120;
+    logo.height = 60;
+    nl::Picture photo = logo;
+    photo.kind = nl::Picture::Photo;
+    photo.x = 500;  // 오른쪽에 놓인 작은 사진 -> 오른쪽으로 띄움
+    photo.width = 200;
+    photo.anchor = 1;
+    doc.pictures = {logo, photo};
+    std::string html = nl::ExportHtml(doc);
+    std::string b64 = nl::Base64Encode(logo.data);
+
+    size_t logoAt = html.find("class=\"logo\"");
+    size_t photoAt = html.find("class=\"photo\"");
+    size_t secondArticle = html.find(nl::ToUtf8(L"둘째 기사"));
+    CHECK(logoAt != std::string::npos && logoAt < html.find("<h1>"));
+    CHECK(photoAt != std::string::npos && photoAt > secondArticle);
+    CHECK(Contains(html, "src=\"data:image/png;base64," + b64 + "\""));
+    CHECK(Contains(html, "float:right"));
+    CHECK(Contains(html, "width:29%"));  // 200 / 688
 }
 
 void TestUtf8() {
@@ -157,6 +307,11 @@ int main() {
     TestNewlines();
     TestHtml();
     TestSampleAndThemes();
+    TestBase64();
+    TestMimeType();
+    TestJpegOrientation();
+    TestPictures();
+    TestHtmlPictures();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

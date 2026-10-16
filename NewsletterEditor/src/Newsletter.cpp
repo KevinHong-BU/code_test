@@ -1,5 +1,6 @@
 ﻿#include "Newsletter.h"
 
+#include <algorithm>
 #include <ctime>
 #include <cwctype>
 
@@ -91,11 +92,125 @@ void AppendWide(std::wstring& out, unsigned long cp) {
     }
 }
 
+int ToInt(const std::wstring& value, int fallback) {
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+const char kBase64Chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
 bool StartsWith(const std::wstring& s, const wchar_t* prefix) {
     return s.compare(0, std::wstring(prefix).size(), prefix) == 0;
 }
 
 }  // namespace
+
+int Newsletter::NextPictureId() const {
+    int id = 0;
+    for (const Picture& p : pictures) id = std::max(id, p.id);
+    return id + 1;
+}
+
+std::string Base64Encode(const std::string& bytes) {
+    std::string out;
+    out.reserve((bytes.size() + 2) / 3 * 4);
+    size_t i = 0;
+    for (; i + 2 < bytes.size(); i += 3) {
+        unsigned v = (static_cast<unsigned char>(bytes[i]) << 16) | (static_cast<unsigned char>(bytes[i + 1]) << 8) |
+                     static_cast<unsigned char>(bytes[i + 2]);
+        out += kBase64Chars[(v >> 18) & 63];
+        out += kBase64Chars[(v >> 12) & 63];
+        out += kBase64Chars[(v >> 6) & 63];
+        out += kBase64Chars[v & 63];
+    }
+    if (i < bytes.size()) {
+        unsigned v = static_cast<unsigned char>(bytes[i]) << 16;
+        if (i + 1 < bytes.size()) v |= static_cast<unsigned char>(bytes[i + 1]) << 8;
+        out += kBase64Chars[(v >> 18) & 63];
+        out += kBase64Chars[(v >> 12) & 63];
+        out += i + 1 < bytes.size() ? kBase64Chars[(v >> 6) & 63] : '=';
+        out += '=';
+    }
+    return out;
+}
+
+bool Base64Decode(const std::string& text, std::string& out) {
+    out.clear();
+    out.reserve(text.size() / 4 * 3);
+    unsigned buffer = 0;
+    int bits = 0;
+    size_t padding = 0;
+    for (char c : text) {
+        int v;
+        if (c >= 'A' && c <= 'Z') v = c - 'A';
+        else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+        else if (c >= '0' && c <= '9') v = c - '0' + 52;
+        else if (c == '+') v = 62;
+        else if (c == '/') v = 63;
+        else if (c == '=') { ++padding; continue; }
+        else if (c == ' ' || c == '\r' || c == '\n' || c == '\t') continue;
+        else return false;
+        if (padding) return false;  // '=' 뒤에 다른 글자가 올 수 없음
+        buffer = (buffer << 6) | static_cast<unsigned>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out += static_cast<char>((buffer >> bits) & 0xFF);
+        }
+    }
+    return padding <= 2;
+}
+
+std::string ImageMimeType(const std::string& data) {
+    auto starts = [&data](const char* magic, size_t n) { return data.size() >= n && data.compare(0, n, magic, n) == 0; };
+    if (starts("\x89PNG\r\n\x1a\n", 8)) return "image/png";
+    if (starts("\xFF\xD8\xFF", 3)) return "image/jpeg";
+    if (starts("GIF87a", 6) || starts("GIF89a", 6)) return "image/gif";
+    if (starts("BM", 2)) return "image/bmp";
+    return "";
+}
+
+int JpegOrientation(const std::string& data) {
+    auto byte = [&data](size_t i) { return static_cast<unsigned>(static_cast<unsigned char>(data[i])); };
+    if (data.size() < 4 || byte(0) != 0xFF || byte(1) != 0xD8) return 1;
+    // JPEG 구획(segment)을 따라가며 APP1 "Exif" 구획을 찾습니다.
+    size_t pos = 2;
+    while (pos + 4 <= data.size() && byte(pos) == 0xFF) {
+        unsigned marker = byte(pos + 1);
+        size_t length = (byte(pos + 2) << 8) | byte(pos + 3);
+        if (marker == 0xDA || marker == 0xD9 || length < 2) break;  // 영상 데이터 시작 또는 끝
+        size_t start = pos + 4, end = std::min(data.size(), pos + 2 + length);
+        if (marker == 0xE1 && end - start >= 14 && data.compare(start, 6, std::string("Exif\0\0", 6)) == 0) {
+            size_t tiff = start + 6;
+            bool little = data.compare(tiff, 2, "II") == 0;
+            auto u16 = [&](size_t i) -> unsigned {
+                if (i + 2 > end) return 0;
+                return little ? (byte(i) | (byte(i + 1) << 8)) : ((byte(i) << 8) | byte(i + 1));
+            };
+            auto u32 = [&](size_t i) -> size_t {
+                if (i + 4 > end) return 0;
+                return little ? (byte(i) | (byte(i + 1) << 8) | (byte(i + 2) << 16) | (static_cast<size_t>(byte(i + 3)) << 24))
+                              : ((static_cast<size_t>(byte(i)) << 24) | (byte(i + 1) << 16) | (byte(i + 2) << 8) | byte(i + 3));
+            };
+            size_t ifd = tiff + u32(tiff + 4);
+            unsigned count = u16(ifd);
+            for (unsigned k = 0; k < count; ++k) {
+                size_t entry = ifd + 2 + k * 12;
+                if (entry + 12 > end) break;
+                if (u16(entry) == 0x0112) {
+                    unsigned value = u16(entry + 8);
+                    return value >= 1 && value <= 8 ? static_cast<int>(value) : 1;
+                }
+            }
+            return 1;
+        }
+        pos = pos + 2 + length;
+    }
+    return 1;
+}
 
 int ThemeCount() { return static_cast<int>(sizeof(kThemes) / sizeof(kThemes[0])); }
 
@@ -310,7 +425,7 @@ std::string Serialize(const Newsletter& doc) {
     };
     w += L"# 도서관 소식지 편집기 문서\n";
     w += L"[newsletter]\n";
-    put(L"format", L"1");
+    put(L"format", L"2");
     put(L"library", doc.libraryName);
     put(L"title", doc.title);
     put(L"issue", doc.issue);
@@ -324,6 +439,20 @@ std::string Serialize(const Newsletter& doc) {
         put(L"title", a.title);
         put(L"body", a.body);
     }
+    for (const Picture& p : doc.pictures) {
+        w += L"\n[picture]\n";
+        put(L"kind", p.kind == Picture::Logo ? L"logo" : L"photo");
+        put(L"page", std::to_wstring(p.page));
+        put(L"x", std::to_wstring(p.x));
+        put(L"y", std::to_wstring(p.y));
+        put(L"width", std::to_wstring(p.width));
+        put(L"height", std::to_wstring(p.height));
+        put(L"wrap", p.wrapText ? L"1" : L"0");
+        // 그림 내용은 한 줄짜리 Base64로 저장해 파일 하나에 모두 담습니다.
+        w += L"data=";
+        w += FromUtf8(Base64Encode(p.data));
+        w += L'\n';
+    }
     return kBom + ToUtf8(w);
 }
 
@@ -333,7 +462,7 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
     std::wstring text = NormalizeNewlines(FromUtf8(bytes));
 
     Newsletter doc;
-    enum { None, Header, InArticle } section = None;
+    enum { None, Header, InArticle, InPicture } section = None;
     bool sawHeader = false;
     size_t start = 0;
     int lineNo = 0;
@@ -357,6 +486,13 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
             doc.articles.emplace_back();
             continue;
         }
+        if (trimmed == L"[picture]") {
+            if (!sawHeader) break;
+            section = InPicture;
+            doc.pictures.emplace_back();
+            doc.pictures.back().id = static_cast<int>(doc.pictures.size());
+            continue;
+        }
         size_t eq = line.find(L'=');
         if (eq == std::wstring::npos || section == None) {
             error = std::to_wstring(lineNo) + L"번째 줄을 해석할 수 없습니다.";
@@ -367,7 +503,7 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
 
         if (section == Header) {
             if (key == L"format") {
-                if (Trim(value) != L"1") {
+                if (Trim(value) != L"1" && Trim(value) != L"2") {
                     error = L"지원하지 않는 파일 버전입니다: " + value;
                     return false;
                 }
@@ -378,14 +514,23 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
             else if (key == L"publisher") doc.publisher = value;
             else if (key == L"greeting") doc.greeting = value;
             else if (key == L"theme") {
-                try {
-                    doc.theme = std::stoi(value);
-                } catch (...) {
-                    doc.theme = 0;
-                }
+                doc.theme = ToInt(value, 0);
                 if (doc.theme < 0 || doc.theme >= ThemeCount()) doc.theme = 0;
             }
             // 알 수 없는 키는 이후 버전과의 호환을 위해 무시합니다.
+        } else if (section == InPicture) {
+            Picture& p = doc.pictures.back();
+            if (key == L"kind") p.kind = Trim(value) == L"logo" ? Picture::Logo : Picture::Photo;
+            else if (key == L"page") p.page = std::max(0, ToInt(value, 0));
+            else if (key == L"x") p.x = ToInt(value, 0);
+            else if (key == L"y") p.y = ToInt(value, 0);
+            else if (key == L"width") p.width = ToInt(value, 0);
+            else if (key == L"height") p.height = ToInt(value, 0);
+            else if (key == L"wrap") p.wrapText = Trim(value) != L"0";
+            else if (key == L"data" && !Base64Decode(ToUtf8(Trim(value)), p.data)) {
+                error = std::to_wstring(lineNo) + L"번째 줄의 그림 데이터가 손상되었습니다.";
+                return false;
+            }
         } else {
             Article& a = doc.articles.back();
             if (key == L"category") a.category = value;
@@ -397,7 +542,11 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
         error = L"도서관 소식지 파일이 아닙니다.";
         return false;
     }
-    out = doc;
+    // 내용이 없거나 크기가 잘못된 그림은 버립니다.
+    doc.pictures.erase(std::remove_if(doc.pictures.begin(), doc.pictures.end(),
+                                      [](const Picture& p) { return p.data.empty() || p.width < 1 || p.height < 1; }),
+                       doc.pictures.end());
+    out = std::move(doc);
     return true;
 }
 
