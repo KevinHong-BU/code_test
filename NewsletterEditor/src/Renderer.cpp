@@ -60,7 +60,7 @@ void SetupPageMapping(HDC hdc, double scale) {
 
 Renderer::Renderer() {
     for (HFONT& f : fonts_) f = nullptr;
-    EnsureFonts(L"", L"");
+    EnsureFonts(Newsletter{});
 }
 
 Renderer::~Renderer() {
@@ -69,37 +69,47 @@ Renderer::~Renderer() {
     }
 }
 
-// 문서의 제목용·본문용 글꼴로 글꼴 개체를 만듭니다. 바뀌지 않았으면 그대로 씁니다.
-void Renderer::EnsureFonts(const std::wstring& heading, const std::wstring& body) {
-    std::wstring headingFace = FontOrDefault(heading).substr(0, LF_FACESIZE - 1);
-    std::wstring bodyFace = FontOrDefault(body).substr(0, LF_FACESIZE - 1);
-    if (fonts_[0] && headingFace == headingFace_ && bodyFace == bodyFace_) return;
-    headingFace_ = headingFace;
-    bodyFace_ = bodyFace;
+// 문서의 글꼴·글자 크기로 글꼴 개체를 만듭니다. 바뀌지 않았으면 그대로 씁니다.
+void Renderer::EnsureFonts(const Newsletter& doc) {
+    FontKey key{FontOrDefault(doc.headingFont).substr(0, LF_FACESIZE - 1),
+                FontOrDefault(doc.bodyFont).substr(0, LF_FACESIZE - 1),
+                std::clamp(doc.headingSize, kMinFontSize, kMaxFontSize),
+                std::clamp(doc.bodySize, kMinFontSize, kMaxFontSize),
+                std::clamp(doc.titleSize, kMinFontSize, kMaxFontSize)};
+    if (fonts_[0] && key == fontKey_) return;
+    fontKey_ = key;
+
+    // 1pt = 쪽 너비 800 / A4 너비 595.3pt 논리 단위. 크기는 반 포인트 단위로 저장되어 있음.
+    const double unitsPerHalfPoint = kPageWidth / 595.28 / 2;
+    const double heading = key.headingSize * unitsPerHalfPoint;
+    const double body = key.bodySize * unitsPerHalfPoint;
+    const double title = key.titleSize * unitsPerHalfPoint;
+    bodyUnits_ = body;
 
     struct Spec {
-        int height;
+        double height;
         int weight;
         bool heading;
     };
     const Spec specs[FontCount] = {
-        {15, FW_NORMAL, false},  // FLibrary
-        {36, FW_BOLD, true},     // FTitle
-        {14, FW_NORMAL, false},  // FMeta
-        {15, FW_NORMAL, false},  // FGreeting
-        {12, FW_BOLD, true},     // FTag
-        {22, FW_BOLD, true},     // FHeading
-        {15, FW_NORMAL, false},  // FBody
-        {11, FW_NORMAL, false},  // FFooter
-        {15, FW_NORMAL, false},  // FEmpty
+        {body, FW_NORMAL, false},                                  // FLibrary
+        {title, FW_BOLD, true},                                    // FTitle
+        {body * 0.93, FW_NORMAL, false},                           // FMeta
+        {body, FW_NORMAL, false},                                  // FGreeting
+        {std::max(9.0, heading * 0.55), FW_BOLD, true},            // FTag
+        {heading, FW_BOLD, true},                                  // FHeading
+        {body, FW_NORMAL, false},                                  // FBody
+        {std::clamp(body * 0.73, 9.0, 14.0), FW_NORMAL, false},    // FFooter
+        {body, FW_NORMAL, false},                                  // FEmpty
     };
     for (int i = 0; i < FontCount; ++i) {
         if (fonts_[i]) DeleteObject(fonts_[i]);
         // 높이는 논리 단위이며, 음수는 글자 높이(em) 기준이라는 뜻입니다.
         // 설치되지 않은 글꼴이면 Windows가 비슷한 글꼴로 대신합니다.
-        fonts_[i] = CreateFontW(-specs[i].height, 0, 0, 0, specs[i].weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                                (specs[i].heading ? headingFace_ : bodyFace_).c_str());
+        fonts_[i] = CreateFontW(-static_cast<int>(std::lround(specs[i].height)), 0, 0, 0, specs[i].weight, FALSE, FALSE,
+                                FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                DEFAULT_PITCH | FF_SWISS,
+                                (specs[i].heading ? key.headingFace : key.bodyFace).c_str());
     }
 }
 
@@ -220,7 +230,7 @@ void Renderer::FlowText(int font, COLORREF color, const std::wstring& text, int 
         size_t next = 0;
         std::wstring line = TakeLine(font, text, pos, s.right - textLeft, &next);
         if (bullet && first) {
-            const int size = 6;
+            const int size = std::max(4, static_cast<int>(std::lround(bodyUnits_ * 0.4)));
             const int center = y_ + LineHeight(font, 0.55);  // 글자 높이의 중간쯤
             Add({Item::Dot, RECT{s.left + 9, center - size / 2, s.left + 9 + size, center + size / 2}, bulletColor, 0,
                  L"", 0});
@@ -261,7 +271,7 @@ void Renderer::Layout(const Newsletter& doc) {
             RECT{p.x - kWrapGapX, p.y - kWrapGapY, p.x + p.width + kWrapGapX, p.y + p.height + kWrapGapY});
     }
 
-    EnsureFonts(doc.headingFont, doc.bodyFont);
+    EnsureFonts(doc);
     measure_ = CreateCompatibleDC(nullptr);
     SetupPageMapping(measure_, kMeasureScale);
 
@@ -292,29 +302,72 @@ void Renderer::Layout(const Newsletter& doc) {
 void Renderer::AddMasthead(const Newsletter& doc) {
     const Theme& theme = GetTheme(doc.theme);
     const int pad = 28;
-    const int innerLeft = kMarginLeft + pad;
-    const int innerRight = kMarginRight - pad;
     const int top = y_;
     const size_t startIndex = pages_[page_].size();
+    const UINT align = doc.titleAlign == TitleAlign::Center  ? DT_CENTER
+                       : doc.titleAlign == TitleAlign::Right ? DT_RIGHT
+                                                             : DT_LEFT;
 
-    y_ = top + 24;
-    if (!Trim(doc.libraryName).empty()) {
-        FlowText(FLibrary, Mix(theme.primary, {255, 255, 255}, 0.75), Trim(doc.libraryName), innerLeft, innerRight,
-                 LineHeight(FLibrary, 1.2));
-        y_ += 2;
+    // 제호 글자들을 (dx, dy)만큼 옮긴 틀에 배치하고, 글자들이 실제로 차지한 영역을 돌려줍니다.
+    auto layoutText = [&](int dx, int dy) {
+        pages_[0].resize(startIndex);
+        const int left = kMarginLeft + pad + dx, right = kMarginRight - pad + dx;
+        y_ = top + 24 + dy;
+        if (!Trim(doc.libraryName).empty()) {
+            FlowText(FLibrary, Mix(theme.primary, {255, 255, 255}, 0.75), Trim(doc.libraryName), left, right,
+                     LineHeight(FLibrary, 1.2), align);
+            y_ += 2;
+        }
+        std::wstring title = Trim(doc.title).empty() ? L"(소식지 제목)" : Trim(doc.title);
+        FlowText(FTitle, RGB(255, 255, 255), title, left, right, LineHeight(FTitle, 1.15), align);
+        std::wstring meta = Trim(doc.issue);
+        if (!Trim(doc.date).empty()) {
+            if (!meta.empty()) meta += L"   ·   ";
+            meta += Trim(doc.date);
+        }
+        if (!meta.empty()) {
+            y_ += 8;
+            FlowText(FMeta, Mix(theme.primary, {255, 255, 255}, 0.85), meta, left, right, LineHeight(FMeta, 1.2),
+                     align);
+        }
+        RECT box{0, 0, 0, 0};
+        for (size_t i = startIndex; i < pages_[0].size(); ++i) {
+            const Item& item = pages_[0][i];
+            if (item.type != Item::Text) continue;
+            int w = std::min<int>(TextWidth(item.font, item.text), item.rc.right - item.rc.left);
+            int x = (item.format & DT_CENTER)  ? (item.rc.left + item.rc.right - w) / 2
+                    : (item.format & DT_RIGHT) ? item.rc.right - w
+                                               : item.rc.left;
+            RECT r{x, item.rc.top, x + w, item.rc.bottom};
+            if (IsRectEmpty(&box)) box = r;
+            else UnionRect(&box, &box, &r);
+        }
+        return box;
+    };
+
+    // 끌어 옮긴 만큼 글자 묶음이 그대로 움직이게 합니다. 글자가 로고 같은 그림을 피하느라 틀 안에서 자리를
+    // 바꿀 수 있으므로, 실제 위치가 목표에 맞을 때까지 틀의 이동 거리를 몇 번 고쳐 다시 배치합니다.
+    // 단, 글자가 색 띠 밖으로 나가지는 않게 합니다.
+    const int dy = std::clamp(doc.titleOffsetY, -16, kMaxTitleOffset);
+    RECT home = layoutText(0, 0);
+    RECT box = home;
+    int movedX = 0;
+    int wantX = std::clamp(doc.titleOffsetX, -kMaxTitleOffset, kMaxTitleOffset);
+    if (!IsRectEmpty(&home) && (wantX != 0 || dy != 0)) {
+        wantX = std::clamp(wantX, std::min(0, kMarginLeft + 8 - static_cast<int>(home.left)),
+                           std::max(0, kMarginRight - 8 - static_cast<int>(home.right)));
+        int frameX = wantX;
+        for (int pass = 0; pass < 4; ++pass) {
+            box = layoutText(frameX, dy);
+            int error = static_cast<int>(home.left) + wantX - static_cast<int>(box.left);
+            if (std::abs(error) <= 1) break;
+            frameX += error;
+        }
+        movedX = static_cast<int>(box.left - home.left);
     }
-    std::wstring title = Trim(doc.title).empty() ? L"(소식지 제목)" : Trim(doc.title);
-    FlowText(FTitle, RGB(255, 255, 255), title, innerLeft, innerRight, LineHeight(FTitle, 1.15));
-    std::wstring meta = Trim(doc.issue);
-    if (!Trim(doc.date).empty()) {
-        if (!meta.empty()) meta += L"   ·   ";
-        meta += Trim(doc.date);
-    }
-    if (!meta.empty()) {
-        y_ += 8;
-        FlowText(FMeta, Mix(theme.primary, {255, 255, 255}, 0.85), meta, innerLeft, innerRight,
-                 LineHeight(FMeta, 1.2));
-    }
+    titleRect_ = box;
+    titleOffsetX_ = movedX;
+    titleOffsetY_ = dy;
     const int bandBottom = y_ + 22;
 
     // 주 색상 띠 아래로 보조색이 6만큼 비어져 나와 강조선처럼 보이게 합니다(먼저 넣은 것이 위에 그려짐).

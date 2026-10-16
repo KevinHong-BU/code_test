@@ -42,6 +42,12 @@ public:
     // (page, y) 위치 바로 위에서 시작한 기사 번호. 그 앞이면 -1. HTML 내보내기에서 사진 위치를 정할 때 씁니다.
     int AnchorFor(int page, int y) const;
 
+    // 1쪽 맨 위 제호(도서관명·소식지 제목·호수/발행일) 글자들이 차지하는 영역(쪽 좌표).
+    RECT TitleRect() const { return titleRect_; }
+    // 실제로 적용된 제호 이동 거리(색 띠를 벗어나지 않도록 줄어든 값).
+    int TitleOffsetX() const { return titleOffsetX_; }
+    int TitleOffsetY() const { return titleOffsetY_; }
+
 private:
     enum FontId { FLibrary, FTitle, FMeta, FGreeting, FTag, FHeading, FBody, FFooter, FEmpty, FontCount };
 
@@ -61,7 +67,7 @@ private:
         int page, y;
     };
 
-    void EnsureFonts(const std::wstring& heading, const std::wstring& body);
+    void EnsureFonts(const Newsletter& doc);
     int LineHeight(int font, double spacing) const;
     int TextWidth(int font, const std::wstring& s) const;
     // text[pos..]에서 width 안에 들어가는 한 줄을 잘라 냅니다. 다음 줄 시작 위치를 next에 돌려줍니다.
@@ -87,8 +93,19 @@ private:
     void AddArticle(const Newsletter& doc, const Article& article, bool first);
     void AddPublisher(const Newsletter& doc);
 
+    struct FontKey {
+        std::wstring headingFace, bodyFace;
+        int headingSize = 0, bodySize = 0, titleSize = 0;
+        bool operator==(const FontKey& o) const {
+            return headingFace == o.headingFace && bodyFace == o.bodyFace && headingSize == o.headingSize &&
+                   bodySize == o.bodySize && titleSize == o.titleSize;
+        }
+    };
     HFONT fonts_[FontCount];
-    std::wstring headingFace_, bodyFace_;
+    FontKey fontKey_;
+    double bodyUnits_ = 15;  // 본문 글자 크기(논리 단위)
+    RECT titleRect_{};       // 1쪽 제호 글자들이 차지하는 영역
+    int titleOffsetX_ = 0, titleOffsetY_ = 0;
     HDC measure_ = nullptr;  // Layout 동안만 유효
 
     std::vector<std::vector<Item>> pages_;

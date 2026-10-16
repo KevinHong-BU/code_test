@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <vector>
@@ -43,6 +44,12 @@ private:
     void SelectFontInCombo(HWND combo, const std::wstring& face);
     void DrawFontItem(const DRAWITEMSTRUCT* item);
     HFONT PreviewFont(const std::wstring& face);
+
+    // 글자 크기·제목 배치
+    HWND AddSizeCombo(int id, std::initializer_list<const wchar_t*> sizes);
+    void OnSizeChanged(int id, int code);
+    void SetTitleAlign(nl::TitleAlign align);
+    void SyncFormatControls();
 
     // 문서 <-> 화면 동기화
     void LoadDocumentToUi();
@@ -111,6 +118,9 @@ private:
     HWND bodyLabel_ = nullptr, body_ = nullptr, bodyHint_ = nullptr;
     HWND logoButton_ = nullptr, photoButton_ = nullptr, deletePictureButton_ = nullptr, pictureHint_ = nullptr;
     HWND headingFontLabel_ = nullptr, headingFont_ = nullptr, bodyFontLabel_ = nullptr, bodyFont_ = nullptr;
+    HWND headingSizeLabel_ = nullptr, headingSize_ = nullptr, bodySizeLabel_ = nullptr, bodySize_ = nullptr;
+    HWND titleLayoutLabel_ = nullptr, titleAlign_ = nullptr, titleSizeLabel_ = nullptr, titleSize_ = nullptr;
+    HWND titleReset_ = nullptr;
     HWND status_ = nullptr;
 
     struct FontInfo {

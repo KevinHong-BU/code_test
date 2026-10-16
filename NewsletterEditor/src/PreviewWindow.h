@@ -38,6 +38,7 @@ public:
     void CancelInteraction();
 
     int SelectedPicture() const { return selected_; }
+    bool IsTitleSelected() const { return titleSelected_; }
     void SelectPicture(int index);  // 그 그림이 보이도록 스크롤
 
     // 선택한 그림 편집
@@ -48,7 +49,7 @@ public:
     void SendToBack();
 
 private:
-    enum class Drag { None, Move, Resize, Place };
+    enum class Drag { None, Move, Resize, Place, Title };
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
@@ -64,6 +65,9 @@ private:
     RECT PictureDeviceRect(const nl::Picture& p) const;
     int HitPicture(POINT pt) const;
     int HitHandle(POINT pt) const;  // 선택한 그림의 손잡이 번호(0~7) 또는 -1
+    RECT TitleDeviceRect() const;
+    bool HitTitle(POINT pt) const;
+    void MoveTitle(int dx, int dy);  // 제호를 (원래 위치 + dx, dy)로 옮김
 
     void SetZoom(double zoom);
     void UpdateScrollBars();
@@ -92,6 +96,9 @@ private:
     int scrollY_ = 0;
 
     int selected_ = -1;
+    bool titleSelected_ = false;  // 맨 위 제호 묶음이 선택됨
+    int titleOrigX_ = 0, titleOrigY_ = 0;
+    double titleStartX_ = 0, titleStartY_ = 0;
     bool placing_ = false;
     nl::Picture pending_;  // 넣을 그림(placing_일 때)
 

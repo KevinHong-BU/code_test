@@ -115,6 +115,45 @@ std::wstring FontOrDefault(const std::wstring& face) {
     return trimmed.empty() ? kDefaultFont : trimmed;
 }
 
+bool ParseFontSize(const std::wstring& text, int* halfPoints) {
+    std::wstring t = Trim(text);
+    if (t.size() >= 2 && (t.compare(t.size() - 2, 2, L"pt") == 0 || t.compare(t.size() - 2, 2, L"PT") == 0))
+        t = Trim(t.substr(0, t.size() - 2));
+    if (t.empty()) return false;
+    // 숫자와 소수점 하나만 허용합니다(로캘에 상관없이 '.'을 소수점으로 봄).
+    long whole = 0, frac = 0, fracDigits = 0;
+    bool dot = false, digits = false;
+    for (wchar_t c : t) {
+        if (c == L'.' && !dot) {
+            dot = true;
+        } else if (c >= L'0' && c <= L'9') {
+            digits = true;
+            if (!dot) {
+                whole = whole * 10 + (c - L'0');
+                if (whole > 1000) return false;
+            } else if (fracDigits < 3) {
+                frac = frac * 10 + (c - L'0');
+                ++fracDigits;
+            }
+        } else {
+            return false;
+        }
+    }
+    if (!digits) return false;
+    double value = whole;
+    if (fracDigits) value += frac / (fracDigits == 1 ? 10.0 : fracDigits == 2 ? 100.0 : 1000.0);
+    int half = static_cast<int>(value * 2 + 0.5);
+    if (half < kMinFontSize || half > kMaxFontSize) return false;
+    *halfPoints = half;
+    return true;
+}
+
+std::wstring FormatFontSize(int halfPoints) {
+    std::wstring s = std::to_wstring(halfPoints / 2);
+    if (halfPoints % 2) s += L".5";
+    return s;
+}
+
 int Newsletter::NextPictureId() const {
     int id = 0;
     for (const Picture& p : pictures) id = std::max(id, p.id);
@@ -442,6 +481,16 @@ std::string Serialize(const Newsletter& doc) {
     put(L"theme", std::to_wstring(doc.theme));
     if (!Trim(doc.headingFont).empty()) put(L"headingFont", Trim(doc.headingFont));
     if (!Trim(doc.bodyFont).empty()) put(L"bodyFont", Trim(doc.bodyFont));
+    put(L"headingSize", FormatFontSize(doc.headingSize));
+    put(L"bodySize", FormatFontSize(doc.bodySize));
+    put(L"titleSize", FormatFontSize(doc.titleSize));
+    put(L"titleAlign", doc.titleAlign == TitleAlign::Center  ? L"center"
+                       : doc.titleAlign == TitleAlign::Right ? L"right"
+                                                             : L"left");
+    if (doc.titleOffsetX || doc.titleOffsetY) {
+        put(L"titleOffsetX", std::to_wstring(doc.titleOffsetX));
+        put(L"titleOffsetY", std::to_wstring(doc.titleOffsetY));
+    }
     for (const Article& a : doc.articles) {
         w += L"\n[article]\n";
         put(L"category", a.category);
@@ -524,6 +573,15 @@ bool Deserialize(const std::string& data, Newsletter& out, std::wstring& error) 
             else if (key == L"greeting") doc.greeting = value;
             else if (key == L"headingFont") doc.headingFont = Trim(value);
             else if (key == L"bodyFont") doc.bodyFont = Trim(value);
+            else if (key == L"headingSize") ParseFontSize(value, &doc.headingSize);  // 잘못된 값이면 기본값 유지
+            else if (key == L"bodySize") ParseFontSize(value, &doc.bodySize);
+            else if (key == L"titleSize") ParseFontSize(value, &doc.titleSize);
+            else if (key == L"titleAlign") {
+                std::wstring a = Trim(value);
+                doc.titleAlign = a == L"center" ? TitleAlign::Center : a == L"right" ? TitleAlign::Right : TitleAlign::Left;
+            }
+            else if (key == L"titleOffsetX") doc.titleOffsetX = std::clamp(ToInt(value, 0), -kMaxTitleOffset, kMaxTitleOffset);
+            else if (key == L"titleOffsetY") doc.titleOffsetY = std::clamp(ToInt(value, 0), -kMaxTitleOffset, kMaxTitleOffset);
             else if (key == L"theme") {
                 doc.theme = ToInt(value, 0);
                 if (doc.theme < 0 || doc.theme >= ThemeCount()) doc.theme = 0;

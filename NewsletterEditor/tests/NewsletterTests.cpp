@@ -26,7 +26,9 @@ bool Contains(const std::string& haystack, const std::string& needle) {
 bool Equal(const nl::Newsletter& a, const nl::Newsletter& b) {
     if (a.libraryName != b.libraryName || a.title != b.title || a.issue != b.issue || a.date != b.date ||
         a.publisher != b.publisher || a.greeting != b.greeting || a.theme != b.theme ||
-        a.headingFont != b.headingFont || a.bodyFont != b.bodyFont ||
+        a.headingFont != b.headingFont || a.bodyFont != b.bodyFont || a.headingSize != b.headingSize ||
+        a.bodySize != b.bodySize || a.titleSize != b.titleSize || a.titleAlign != b.titleAlign ||
+        a.titleOffsetX != b.titleOffsetX || a.titleOffsetY != b.titleOffsetY ||
         a.articles.size() != b.articles.size())
         return false;
     for (size_t i = 0; i < a.articles.size(); ++i) {
@@ -183,6 +185,58 @@ void TestFonts() {
     CHECK(!Contains(html, "<script>"));
 }
 
+void TestFontSizes() {
+    int v = 0;
+    CHECK(nl::ParseFontSize(L"11", &v) && v == 22);
+    CHECK(nl::ParseFontSize(L" 10.5 ", &v) && v == 21);
+    CHECK(nl::ParseFontSize(L"10.5pt", &v) && v == 21);
+    CHECK(nl::ParseFontSize(L"12.3", &v) && v == 25);  // 0.5pt 단위로 반올림 -> 12.5
+    CHECK(nl::ParseFontSize(L"72", &v) && v == 144);
+    v = 7;
+    CHECK(!nl::ParseFontSize(L"", &v) && v == 7);
+    CHECK(!nl::ParseFontSize(L".", &v));
+    CHECK(!nl::ParseFontSize(L"5", &v));      // 너무 작음
+    CHECK(!nl::ParseFontSize(L"73", &v));     // 너무 큼
+    CHECK(!nl::ParseFontSize(L"1.2.3", &v));
+    CHECK(!nl::ParseFontSize(L"-11", &v));
+    CHECK(!nl::ParseFontSize(L"abc", &v));
+    CHECK(!nl::ParseFontSize(L"99999999999", &v));
+    CHECK(nl::FormatFontSize(22) == L"11");
+    CHECK(nl::FormatFontSize(21) == L"10.5");
+
+    // 크기·제목 배치가 저장되고 다시 읽힘
+    nl::Newsletter doc = nl::CreateSample();
+    doc.headingSize = 40;
+    doc.bodySize = 25;
+    doc.titleSize = 72;
+    doc.titleAlign = nl::TitleAlign::Right;
+    doc.titleOffsetX = -35;
+    doc.titleOffsetY = 12;
+    std::string data = nl::Serialize(doc);
+    CHECK(Contains(data, "bodySize=12.5"));
+    CHECK(Contains(data, "titleAlign=right"));
+    nl::Newsletter loaded;
+    std::wstring error;
+    CHECK(nl::Deserialize(data, loaded, error));
+    CHECK(Equal(doc, loaded));
+
+    // 이전 파일(값 없음)은 기본값, 잘못된 값은 무시
+    CHECK(nl::Deserialize("[newsletter]\nformat=2\nbodySize=abc\ntitleSize=500\ntitleOffsetX=99999\n", loaded,
+                          error));
+    CHECK(loaded.bodySize == nl::kDefaultBodySize && loaded.titleSize == nl::kDefaultTitleSize);
+    CHECK(loaded.headingSize == nl::kDefaultHeadingSize && loaded.titleAlign == nl::TitleAlign::Left);
+    CHECK(loaded.titleOffsetX == nl::kMaxTitleOffset);
+
+    // HTML: 기본 크기면 원래 px 그대로, 바꾸면 비율대로. 제목 정렬 반영.
+    std::string html = nl::ExportHtml(nl::CreateSample());
+    CHECK(Contains(html, "font-size:16.0px") && Contains(html, "font-size:34.0px"));
+    CHECK(Contains(html, "text-align:left"));
+    html = nl::ExportHtml(doc);
+    CHECK(Contains(html, "font-size:18.2px"));  // 16 * 25/22
+    CHECK(Contains(html, "font-size:45.3px"));  // 34 * 72/54
+    CHECK(Contains(html, "text-align:right"));
+}
+
 void TestHtmlPictures() {
     nl::Newsletter doc = nl::CreateBlank();
     doc.articles = {{L"공지사항", L"첫 기사", L"본문"}, {L"기타", L"둘째 기사", L"본문"}};
@@ -337,6 +391,7 @@ int main() {
     TestPictures();
     TestHtmlPictures();
     TestFonts();
+    TestFontSizes();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

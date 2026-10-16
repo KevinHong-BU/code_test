@@ -29,6 +29,15 @@ struct Picture {
     int anchor = -1;       // HTML 내보내기용 기준 기사 번호(-1이면 맨 위). 파일에 저장하지 않음.
 };
 
+enum class TitleAlign { Left, Center, Right };
+
+// 반 포인트 단위 기본 크기와 허용 범위
+constexpr int kDefaultHeadingSize = 32;  // 16pt
+constexpr int kDefaultBodySize = 22;     // 11pt
+constexpr int kDefaultTitleSize = 54;    // 27pt
+constexpr int kMinFontSize = 12, kMaxFontSize = 144;  // 6pt ~ 72pt
+constexpr int kMaxTitleOffset = 600;
+
 struct Newsletter {
     std::wstring libraryName;  // 도서관 이름
     std::wstring title;        // 소식지 제목
@@ -39,6 +48,13 @@ struct Newsletter {
     int theme = 0;             // 색상 테마 번호
     std::wstring headingFont;  // 제호·기사 제목·분류 꼬리표 글꼴 (비어 있으면 기본 글꼴)
     std::wstring bodyFont;     // 본문·머리말·발행처 등 나머지 글꼴 (비어 있으면 기본 글꼴)
+    // 글자 크기는 0.5pt 단위 정수(반 포인트)로 저장합니다. 예: 22 = 11pt
+    int headingSize = kDefaultHeadingSize;  // 기사 제목 (분류 꼬리표도 비례)
+    int bodySize = kDefaultBodySize;        // 본문 (머리말·발행처·바닥글도 비례)
+    int titleSize = kDefaultTitleSize;      // 맨 위 소식지 제목(제호)
+    // 제호(도서관명·소식지 제목·호수/발행일 묶음)의 정렬과, 미리보기에서 끌어 옮긴 거리(쪽 좌표 단위)
+    TitleAlign titleAlign = TitleAlign::Left;
+    int titleOffsetX = 0, titleOffsetY = 0;
     std::vector<Article> articles;
     std::vector<Picture> pictures;  // 뒤에 있을수록 위에 그려짐
 
@@ -55,6 +71,12 @@ struct Theme {
     Color accent;   // 보조 강조선
     Color light;    // 머리말 상자 배경
 };
+
+// "10", "10.5", "10.5pt" 같은 글자 크기를 반 포인트 단위로 읽습니다(0.5pt로 반올림).
+// 숫자가 아니거나 허용 범위(6~72pt) 밖이면 false.
+bool ParseFontSize(const std::wstring& text, int* halfPoints);
+// 반 포인트 값을 "11", "10.5" 같은 글자로 만듭니다.
+std::wstring FormatFontSize(int halfPoints);
 
 // 글꼴을 고르지 않았을 때 쓰는 기본 글꼴(Windows 기본 한글 글꼴).
 extern const wchar_t kDefaultFont[];

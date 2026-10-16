@@ -81,6 +81,14 @@ std::wstring PhotoHtml(const Picture& p) {
     return ImageTag(p, L"photo", style);
 }
 
+// 기본 크기일 때의 px 값을 문서 글자 크기 비율로 늘이거나 줄입니다.
+std::wstring Px(double basePx, int size, int defaultSize) {
+    double px = basePx * size / defaultSize;
+    wchar_t buf[32];
+    std::swprintf(buf, 32, L"%.1fpx", px);
+    return buf;
+}
+
 // CSS font-family 값: 고른 글꼴 다음에, 그 글꼴이 없는 컴퓨터를 위한 대체 글꼴을 붙입니다.
 std::wstring FontStack(const std::wstring& face) {
     std::wstring name;
@@ -119,28 +127,36 @@ std::string ExportHtml(const Newsletter& doc) {
     h += L"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n";
     h += L"<title>" + HtmlEscape(docTitle) + L"</title>\n<style>\n";
     h += L"body{margin:0;background:#e9ebee;font-family:" + FontStack(doc.bodyFont) +
-         L";color:#222;line-height:1.7}\n";
+         L";font-size:" + Px(16, doc.bodySize, kDefaultBodySize) + L";color:#222;line-height:1.7}\n";
     h += L".masthead h1,.article h2,.tag{font-family:" + FontStack(doc.headingFont) + L"}\n";
     h += L".paper{max-width:760px;margin:24px auto;background:#fff;padding:40px 48px;"
          L"box-shadow:0 2px 10px rgba(0,0,0,.15)}\n";
     h += L".masthead{background:" + Css(theme.primary) + L";color:#fff;border-radius:8px;padding:22px 28px;"
          L"border-bottom:6px solid " + Css(theme.accent) + L"}\n";
-    h += L".library{font-size:15px;opacity:.85}\n";
-    h += L".masthead h1{margin:4px 0 10px;font-size:34px;line-height:1.25}\n";
-    h += L".meta{font-size:13px;opacity:.9}\n";
+    const wchar_t* titleAlign = doc.titleAlign == TitleAlign::Center  ? L"center"
+                                : doc.titleAlign == TitleAlign::Right ? L"right"
+                                                                      : L"left";
+    h += L".masthead .library,.masthead h1,.masthead .meta{text-align:" + std::wstring(titleAlign) + L"}\n";
+    h += L".library{font-size:" + Px(15, doc.bodySize, kDefaultBodySize) + L";opacity:.85}\n";
+    h += L".masthead h1{margin:4px 0 10px;font-size:" + Px(34, doc.titleSize, kDefaultTitleSize) +
+         L";line-height:1.25}\n";
+    h += L".meta{font-size:" + Px(13, doc.bodySize, kDefaultBodySize) + L";opacity:.9}\n";
     h += L".greeting{background:" + Css(theme.light) + L";border-left:4px solid " + Css(theme.primary) +
          L";padding:14px 18px;margin:24px 0 8px;border-radius:0 6px 6px 0}\n";
     h += L".article{margin-top:30px}\n";
-    h += L".tag{display:inline-block;color:#fff;font-size:12px;font-weight:bold;border-radius:10px;"
+    h += L".tag{display:inline-block;color:#fff;font-size:" + Px(12, doc.headingSize, kDefaultHeadingSize) +
+         L";font-weight:bold;border-radius:10px;"
          L"padding:1px 10px;margin-bottom:4px}\n";
-    h += L".article h2{margin:2px 0 8px;font-size:21px;padding-bottom:6px;border-bottom:2px solid " +
+    h += L".article h2{margin:2px 0 8px;font-size:" + Px(21, doc.headingSize, kDefaultHeadingSize) +
+         L";padding-bottom:6px;border-bottom:2px solid " +
          Css(theme.light) + L"}\n";
     // overflow:hidden: 왼쪽에 띄운 사진 옆에서도 글머리표가 사진과 겹치지 않게 함
     h += L".article p{margin:8px 0}\n.article ul{margin:8px 0;padding-left:22px;overflow:hidden}\n";
     h += L".masthead::after{content:'';display:block;clear:both}\n.logo{float:right;max-width:40%;"
          L"margin-left:16px}\n";
     h += L".article::after{content:'';display:block;clear:both}\n.photo{border-radius:4px}\n";
-    h += L".footer{margin-top:40px;padding-top:12px;border-top:1px solid #ccc;color:#666;font-size:13px;"
+    h += L".footer{margin-top:40px;padding-top:12px;border-top:1px solid #ccc;color:#666;font-size:" +
+         Px(13, doc.bodySize, kDefaultBodySize) + L";"
          L"text-align:center}\n";
     h += L"@media print{body{background:#fff}.paper{box-shadow:none;margin:0;max-width:none}"
          L".masthead,.tag,.greeting{-webkit-print-color-adjust:exact;print-color-adjust:exact}}\n";

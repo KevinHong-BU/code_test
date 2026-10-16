@@ -65,6 +65,7 @@ void PreviewWindow::SetDocument(nl::Newsletter* doc, ImageLibrary* images) {
     images_ = images;
     scrollX_ = scrollY_ = 0;
     selected_ = -1;
+    titleSelected_ = false;
     placing_ = false;
     drag_ = Drag::None;
     Refresh();
@@ -146,6 +147,28 @@ int PreviewWindow::HitHandle(POINT pt) const {
         if (std::abs(pt.x - c.x) <= kHandleSize && std::abs(pt.y - c.y) <= kHandleSize) return h;
     }
     return -1;
+}
+
+RECT PreviewWindow::TitleDeviceRect() const {
+    RECT r = renderer_.TitleRect();
+    if (IsRectEmpty(&r)) return r;
+    POINT a = ToDevice(0, r.left, r.top);
+    POINT b = ToDevice(0, r.right, r.bottom);
+    return RECT{a.x - 4, a.y - 3, b.x + 4, b.y + 3};
+}
+
+bool PreviewWindow::HitTitle(POINT pt) const {
+    RECT r = TitleDeviceRect();
+    return doc_ && !IsRectEmpty(&r) && PtInRect(&r, pt);
+}
+
+void PreviewWindow::MoveTitle(int dx, int dy) {
+    doc_->titleOffsetX = std::clamp(titleOrigX_ + dx, -nl::kMaxTitleOffset, nl::kMaxTitleOffset);
+    doc_->titleOffsetY = std::clamp(titleOrigY_ + dy, -16, nl::kMaxTitleOffset);
+    Refresh();
+    // 색 띠 끝에 닿아 덜 움직였으면 실제 적용된 값으로 맞춰 둡니다(되돌아올 때 헛도는 구간이 없도록).
+    doc_->titleOffsetX = renderer_.TitleOffsetX();
+    doc_->titleOffsetY = renderer_.TitleOffsetY();
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +317,17 @@ void PreviewWindow::DrawOverlay(HDC hdc) {
         }
     }
 
+    if (doc_ && titleSelected_) {
+        RECT r = TitleDeviceRect();
+        HPEN dashTitle = CreatePen(PS_DOT, 1, kSelection);
+        SelectObject(hdc, dashTitle);
+        SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        SetBkMode(hdc, TRANSPARENT);
+        Rectangle(hdc, r.left, r.top, r.right, r.bottom);
+        SelectObject(hdc, pen);
+        DeleteObject(dashTitle);
+    }
+
     if (drag_ == Drag::Place) {
         HPEN dash = CreatePen(PS_DOT, 1, kSelection);
         SelectObject(hdc, dash);
@@ -331,6 +365,7 @@ void PreviewWindow::BeginPlacing(const nl::Picture& picture) {
     pending_ = picture;
     placing_ = true;
     selected_ = -1;
+    titleSelected_ = false;
     drag_ = Drag::None;
     SetFocus(hwnd_);
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -345,11 +380,16 @@ void PreviewWindow::CancelInteraction() {
         if ((cancelled == Drag::Move || cancelled == Drag::Resize) && selected_ >= 0) {
             doc_->pictures[selected_] = original_;  // 끌던 것을 되돌림
             Refresh();
+        } else if (cancelled == Drag::Title) {
+            doc_->titleOffsetX = titleOrigX_;
+            doc_->titleOffsetY = titleOrigY_;
+            Refresh();
         }
     } else if (placing_) {
         placing_ = false;
     } else {
         selected_ = -1;
+        titleSelected_ = false;
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
     NotifyParent();
@@ -358,6 +398,7 @@ void PreviewWindow::CancelInteraction() {
 void PreviewWindow::SelectPicture(int index) {
     if (!doc_ || index < 0 || index >= static_cast<int>(doc_->pictures.size())) index = -1;
     selected_ = index;
+    if (index >= 0) titleSelected_ = false;
     if (index >= 0) {
         RECT rc;
         GetClientRect(hwnd_, &rc);
@@ -449,11 +490,19 @@ void PreviewWindow::OnMouseDown(POINT pt, WPARAM) {
     }
 
     int hit = HitPicture(pt);
-    if (hit != selected_) {
+    bool onTitle = hit < 0 && HitTitle(pt);
+    if (hit != selected_ || onTitle != titleSelected_) {
         selected_ = hit;
+        titleSelected_ = onTitle;
         NotifyParent();
     }
-    if (hit >= 0) {
+    if (onTitle) {
+        drag_ = Drag::Title;
+        titleOrigX_ = doc_->titleOffsetX;
+        titleOrigY_ = doc_->titleOffsetY;
+        ToLogical(pt, 0, &titleStartX_, &titleStartY_);
+        SetCapture(hwnd_);
+    } else if (hit >= 0) {
         drag_ = Drag::Move;
         original_ = doc_->pictures[hit];
         double lx, ly;
@@ -477,6 +526,12 @@ void PreviewWindow::OnMouseMove(POINT pt, WPARAM keys) {
     if (drag_ == Drag::Place) {
         placeNow_ = pt;
         InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+    if (drag_ == Drag::Title) {
+        double lx, ly;
+        ToLogical(pt, 0, &lx, &ly);
+        MoveTitle(static_cast<int>(std::lround(lx - titleStartX_)), static_cast<int>(std::lround(ly - titleStartY_)));
         return;
     }
 
@@ -528,6 +583,11 @@ void PreviewWindow::OnMouseUp(POINT pt) {
     if (GetCapture() == hwnd_) ReleaseCapture();
     if (finished == Drag::Place) {
         FinishPlacing(pt);
+        return;
+    }
+    if (finished == Drag::Title) {
+        if (doc_->titleOffsetX != titleOrigX_ || doc_->titleOffsetY != titleOrigY_) NotifyEdited();
+        InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
     if (selected_ < 0 || selected_ >= static_cast<int>(doc_->pictures.size())) return;
@@ -588,22 +648,34 @@ void PreviewWindow::OnContextMenu(POINT screenPt) {
     if (!doc_ || placing_) return;
     POINT pt = screenPt;
     if (pt.x == -1 && pt.y == -1) {  // 키보드(메뉴 키)로 연 경우: 선택한 그림 위치에 띄움
-        if (selected_ < 0) return;
-        RECT r = PictureDeviceRect(doc_->pictures[selected_]);
+        if (selected_ < 0 && !titleSelected_) return;
+        RECT r = selected_ >= 0 ? PictureDeviceRect(doc_->pictures[selected_]) : TitleDeviceRect();
         pt = POINT{r.left + 10, r.top + 10};
         ClientToScreen(hwnd_, &pt);
         screenPt = pt;
     } else {
         ScreenToClient(hwnd_, &pt);
         int hit = HitPicture(pt);
-        if (hit != selected_) {
+        bool onTitle = hit < 0 && HitTitle(pt);
+        if (hit != selected_ || onTitle != titleSelected_) {
             selected_ = hit;
+            titleSelected_ = onTitle;
             InvalidateRect(hwnd_, nullptr, FALSE);
             NotifyParent();
         }
     }
     HMENU menu = CreatePopupMenu();
-    if (selected_ >= 0) {
+    if (titleSelected_) {
+        auto radio = [&](int id, nl::TitleAlign a, const wchar_t* text) {
+            AppendMenuW(menu, MF_STRING | (doc_->titleAlign == a ? MF_CHECKED : 0), id, text);
+        };
+        radio(IDM_TITLE_ALIGN_LEFT, nl::TitleAlign::Left, L"왼쪽 정렬");
+        radio(IDM_TITLE_ALIGN_CENTER, nl::TitleAlign::Center, L"가운데 정렬");
+        radio(IDM_TITLE_ALIGN_RIGHT, nl::TitleAlign::Right, L"오른쪽 정렬");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING | ((doc_->titleOffsetX || doc_->titleOffsetY) ? 0 : MF_GRAYED), IDM_TITLE_RESET,
+                    L"제목 위치 처음대로");
+    } else if (selected_ >= 0) {
         bool wrap = doc_->pictures[selected_].wrapText;
         AppendMenuW(menu, MF_STRING, IDM_PICTURE_REPLACE, L"그림 바꾸기...");
         AppendMenuW(menu, MF_STRING, IDM_PICTURE_ASPECT, L"원래 비율로 맞추기");
@@ -629,7 +701,7 @@ bool PreviewWindow::OnSetCursor() {
     LPCWSTR cursor = IDC_ARROW;
     if (placing_ || drag_ == Drag::Place) {
         cursor = IDC_CROSS;
-    } else if (drag_ == Drag::Move) {
+    } else if (drag_ == Drag::Move || drag_ == Drag::Title) {
         cursor = IDC_SIZEALL;
     } else {
         int h = drag_ == Drag::Resize ? handle_ : HitHandle(pt);
@@ -637,7 +709,7 @@ bool PreviewWindow::OnSetCursor() {
             static const LPCWSTR kHandleCursors[8] = {IDC_SIZENWSE, IDC_SIZENS, IDC_SIZENESW, IDC_SIZEWE,
                                                       IDC_SIZENWSE, IDC_SIZENS, IDC_SIZENESW, IDC_SIZEWE};
             cursor = kHandleCursors[h];
-        } else if (HitPicture(pt) >= 0) {
+        } else if (HitPicture(pt) >= 0 || HitTitle(pt)) {
             cursor = IDC_SIZEALL;
         }
     }
@@ -712,6 +784,17 @@ LRESULT PreviewWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             RECT rc;
             GetClientRect(hwnd_, &rc);
             bool hasSelection = doc_ && selected_ >= 0 && drag_ == Drag::None;
+            if (doc_ && titleSelected_ && drag_ == Drag::None &&
+                (wParam == VK_UP || wParam == VK_DOWN || wParam == VK_LEFT || wParam == VK_RIGHT)) {
+                // 선택한 제호를 방향키로 조금씩(Shift: 크게) 옮깁니다.
+                int s = (GetKeyState(VK_SHIFT) & 0x8000) ? 10 : 2;
+                titleOrigX_ = doc_->titleOffsetX;
+                titleOrigY_ = doc_->titleOffsetY;
+                MoveTitle(wParam == VK_LEFT ? -s : wParam == VK_RIGHT ? s : 0,
+                          wParam == VK_UP ? -s : wParam == VK_DOWN ? s : 0);
+                NotifyEdited();
+                return 0;
+            }
             int step = (GetKeyState(VK_SHIFT) & 0x8000) ? 10 : 2;
             switch (wParam) {
                 case VK_DELETE:

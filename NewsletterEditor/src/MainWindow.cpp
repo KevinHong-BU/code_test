@@ -215,8 +215,22 @@ void MainWindow::CreateControls() {
     LoadSystemFonts();
     headingFontLabel_ = AddLabel(L"제목 글꼴");
     headingFont_ = AddFontCombo(IDC_HEADING_FONT);
+    headingSizeLabel_ = AddLabel(L"크기");
+    headingSize_ = AddSizeCombo(IDC_HEADING_SIZE, {L"12", L"14", L"16", L"18", L"20", L"22", L"24", L"28"});
     bodyFontLabel_ = AddLabel(L"본문 글꼴");
     bodyFont_ = AddFontCombo(IDC_BODY_FONT);
+    bodySizeLabel_ = AddLabel(L"크기");
+    bodySize_ = AddSizeCombo(IDC_BODY_SIZE, {L"9", L"10", L"10.5", L"11", L"12", L"13", L"14", L"16", L"18"});
+    titleLayoutLabel_ = AddLabel(L"제목 배치");
+    titleAlign_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0,
+                                  0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_TITLE_ALIGN)), instance_,
+                                  nullptr);
+    SendMessageW(titleAlign_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (const wchar_t* text : {L"왼쪽 정렬", L"가운데 정렬", L"오른쪽 정렬"})
+        SendMessageW(titleAlign_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text));
+    titleSizeLabel_ = AddLabel(L"크기");
+    titleSize_ = AddSizeCombo(IDC_TITLE_SIZE, {L"20", L"24", L"27", L"30", L"36", L"40", L"48"});
+    titleReset_ = AddButton(IDM_TITLE_RESET, L"위치 처음대로");
     publisherLabel_ = AddLabel(L"발행처");
     publisher_ = AddEdit(IDC_PUBLISHER, true);
     greetingLabel_ = AddLabel(L"머리말");
@@ -367,12 +381,28 @@ void MainWindow::LayoutControls() {
     place(theme_, col2 + S(44), y, ir - col2 - S(44), S(260));
     y += rowStep;
     {
-        const int fontW = (ir - il - colGap) / 2;
-        const int fontCol2 = il + fontW + colGap;
+        // 글꼴 [목록] 크기 [값] 두 줄, 그리고 제목 배치 줄
+        const int sizeW = S(64), sizeLabelW = S(34);
+        const int sizeX = ir - sizeW;
+        const int fontRight = sizeX - sizeLabelW - S(4);
         place(headingFontLabel_, il, y, labelW, rowH);
-        place(headingFont_, il + labelW, y, fontW - labelW, S(360));
-        place(bodyFontLabel_, fontCol2, y, labelW, rowH);
-        place(bodyFont_, fontCol2 + labelW, y, ir - fontCol2 - labelW, S(360));
+        place(headingFont_, il + labelW, y, fontRight - il - labelW, S(360));
+        place(headingSizeLabel_, sizeX - sizeLabelW, y, sizeLabelW, rowH);
+        place(headingSize_, sizeX, y, sizeW, S(240));
+        y += rowStep;
+        place(bodyFontLabel_, il, y, labelW, rowH);
+        place(bodyFont_, il + labelW, y, fontRight - il - labelW, S(360));
+        place(bodySizeLabel_, sizeX - sizeLabelW, y, sizeLabelW, rowH);
+        place(bodySize_, sizeX, y, sizeW, S(240));
+        y += rowStep;
+        const int alignW = S(116);
+        place(titleLayoutLabel_, il, y, labelW, rowH);
+        place(titleAlign_, il + labelW, y, alignW, S(200));
+        int x = il + labelW + alignW + S(8);
+        place(titleSizeLabel_, x, y, sizeLabelW, rowH);
+        place(titleSize_, x + sizeLabelW, y, sizeW, S(240));
+        x += sizeLabelW + sizeW + S(8);
+        place(titleReset_, x, y, ir - x, rowH);
     }
     y += rowStep;
     place(publisherLabel_, il, y, labelW, rowH);
@@ -434,6 +464,7 @@ void MainWindow::LoadDocumentToUi() {
     SendMessageW(theme_, CB_SETCURSEL, doc_.theme, 0);
     SelectFontInCombo(headingFont_, nl::FontOrDefault(doc_.headingFont));
     SelectFontInCombo(bodyFont_, nl::FontOrDefault(doc_.bodyFont));
+    SyncFormatControls();
 
     SendMessageW(list_, LB_RESETCONTENT, 0, 0);
     for (const auto& a : doc_.articles)
@@ -506,6 +537,11 @@ void MainWindow::OnInfoChanged(int id) {
         case IDC_THEME: {
             int sel = static_cast<int>(SendMessageW(theme_, CB_GETCURSEL, 0, 0));
             doc_.theme = sel < 0 ? 0 : sel;
+            break;
+        }
+        case IDC_TITLE_ALIGN: {
+            int sel = static_cast<int>(SendMessageW(titleAlign_, CB_GETCURSEL, 0, 0));
+            doc_.titleAlign = sel == 1 ? nl::TitleAlign::Center : sel == 2 ? nl::TitleAlign::Right : nl::TitleAlign::Left;
             break;
         }
         case IDC_HEADING_FONT:
@@ -916,6 +952,73 @@ void MainWindow::DrawFontItem(const DRAWITEMSTRUCT* item) {
 }
 
 // ---------------------------------------------------------------------------
+// 글자 크기·제목 배치
+
+HWND MainWindow::AddSizeCombo(int id, std::initializer_list<const wchar_t*> sizes) {
+    // 목록에서 고르거나 10.5처럼 직접 써 넣을 수 있는 크기 칸(pt)
+    HWND combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN,
+                                 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_,
+                                 nullptr);
+    SendMessageW(combo, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), FALSE);
+    for (const wchar_t* s : sizes) SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s));
+    SendMessageW(combo, CB_LIMITTEXT, 6, 0);
+    return combo;
+}
+
+void MainWindow::OnSizeChanged(int id, int code) {
+    HWND combo = id == IDC_HEADING_SIZE ? headingSize_ : id == IDC_BODY_SIZE ? bodySize_ : titleSize_;
+    int& target = id == IDC_HEADING_SIZE ? doc_.headingSize : id == IDC_BODY_SIZE ? doc_.bodySize : doc_.titleSize;
+    if (code == CBN_KILLFOCUS) {
+        // 칸을 떠날 때 잘못 써 넣은 값은 현재 크기로 되돌려 보여 줍니다.
+        SyncFormatControls();
+        return;
+    }
+    std::wstring text;
+    if (code == CBN_SELCHANGE) {
+        int sel = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+        if (sel < 0) return;
+        int len = static_cast<int>(SendMessageW(combo, CB_GETLBTEXTLEN, sel, 0));
+        text.assign(static_cast<size_t>(len) + 1, L'\0');
+        SendMessageW(combo, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(&text[0]));
+        text.resize(static_cast<size_t>(len));
+    } else {
+        text = GetText(combo);
+    }
+    int value = 0;
+    if (!nl::ParseFontSize(text, &value) || value == target) return;  // 입력 중인 값(빈칸 등)은 무시
+    target = value;
+    MarkDirty();
+    preview_.Refresh();
+}
+
+void MainWindow::SetTitleAlign(nl::TitleAlign align) {
+    if (doc_.titleAlign == align) return;
+    doc_.titleAlign = align;
+    MarkDirty();
+    preview_.Refresh();
+    SyncFormatControls();
+}
+
+// 문서의 글자 크기·제목 배치 값을 화면 칸에 보여 줍니다.
+void MainWindow::SyncFormatControls() {
+    bool wasLoading = loading_;
+    loading_ = true;
+    auto showSize = [](HWND combo, int halfPoints) {
+        std::wstring text = nl::FormatFontSize(halfPoints);
+        if (GetText(combo) != text) SetWindowTextW(combo, text.c_str());
+    };
+    // 입력 중인 칸은 건드리지 않아야 커서가 튀지 않습니다.
+    HWND focus = GetFocus();
+    if (!focus || GetParent(focus) != headingSize_) showSize(headingSize_, doc_.headingSize);
+    if (!focus || GetParent(focus) != bodySize_) showSize(bodySize_, doc_.bodySize);
+    if (!focus || GetParent(focus) != titleSize_) showSize(titleSize_, doc_.titleSize);
+    int align = doc_.titleAlign == nl::TitleAlign::Center ? 1 : doc_.titleAlign == nl::TitleAlign::Right ? 2 : 0;
+    SendMessageW(titleAlign_, CB_SETCURSEL, align, 0);
+    EnableWindow(titleReset_, doc_.titleOffsetX != 0 || doc_.titleOffsetY != 0);
+    loading_ = wasLoading;
+}
+
+// ---------------------------------------------------------------------------
 // 그림
 
 bool MainWindow::LoadPictureFile(const wchar_t* title, nl::Picture* picture) {
@@ -1085,7 +1188,13 @@ void MainWindow::OnCommand(int id, int code, HWND control) {
             case IDC_THEME:
             case IDC_HEADING_FONT:
             case IDC_BODY_FONT:
+            case IDC_TITLE_ALIGN:
                 if (code == CBN_SELCHANGE) OnInfoChanged(id);
+                return;
+            case IDC_HEADING_SIZE:
+            case IDC_BODY_SIZE:
+            case IDC_TITLE_SIZE:
+                if (code == CBN_SELCHANGE || code == CBN_EDITCHANGE || code == CBN_KILLFOCUS) OnSizeChanged(id, code);
                 return;
             case IDC_CATEGORY:
                 if (code == CBN_SELCHANGE || code == CBN_EDITCHANGE) OnArticleChanged(id, code);
@@ -1134,6 +1243,17 @@ void MainWindow::OnCommand(int id, int code, HWND control) {
         case IDM_PICTURE_BACK: preview_.SendToBack(); break;
         case IDM_PICTURE_DELETE: preview_.DeleteSelected(); break;
         case IDCANCEL: preview_.CancelInteraction(); break;  // Esc
+        case IDM_TITLE_ALIGN_LEFT: SetTitleAlign(nl::TitleAlign::Left); break;
+        case IDM_TITLE_ALIGN_CENTER: SetTitleAlign(nl::TitleAlign::Center); break;
+        case IDM_TITLE_ALIGN_RIGHT: SetTitleAlign(nl::TitleAlign::Right); break;
+        case IDM_TITLE_RESET:
+            if (doc_.titleOffsetX || doc_.titleOffsetY) {
+                doc_.titleOffsetX = doc_.titleOffsetY = 0;
+                MarkDirty();
+                preview_.Refresh();
+                SyncFormatControls();
+            }
+            break;
         case IDM_ZOOM_IN: preview_.ZoomIn(); break;
         case IDM_ZOOM_OUT: preview_.ZoomOut(); break;
         case IDM_ZOOM_FIT: preview_.ZoomFit(); break;
@@ -1196,6 +1316,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_APP_DOC_EDITED:
             images_.Prune(doc_);  // 지운 그림의 캐시 정리
+            SyncFormatControls();  // 미리보기에서 제목을 옮겼으면 [위치 처음대로] 단추 상태 갱신
             MarkDirty();
             UpdateStatus();
             UpdatePictureCommands();
