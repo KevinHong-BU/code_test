@@ -1,0 +1,86 @@
+:root {
+  --bg: #0b0b0b;
+  --panel: #151515;
+  --line: #2a2a2a;
+  --text: #e8e8e8;
+  --muted: #9a9a9a;
+  --orange: #ff6a3c;
+  --blue: #14cffd;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body {
+  font: 14px/1.5 -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+main { max-width: 1140px; margin: 0 auto; padding: 16px; }
+
+#screen-wrap { display: flex; justify-content: center; }
+#screen {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: #000;
+  box-shadow: 0 0 0 1px #222, 0 0 40px rgba(255, 106, 60, .08);
+  touch-action: none;
+  max-width: 100%;
+}
+
+h1 { font-size: 18px; letter-spacing: 4px; color: var(--orange); margin: 18px 0 4px; }
+.sub, .tip, .legend, #ed-msg { color: var(--muted); }
+.cols { display: flex; flex-wrap: wrap; gap: 8px 32px; }
+table { border-collapse: collapse; }
+th { text-align: left; font-weight: 600; padding: 3px 14px 3px 0; color: var(--text); white-space: nowrap; vertical-align: top; }
+td { padding: 3px 0; color: var(--muted); }
+kbd {
+  display: inline-block; min-width: 20px; padding: 0 5px; margin: 0 2px 2px 0;
+  border: 1px solid #444; border-bottom-width: 2px; border-radius: 4px;
+  background: #1d1d1d; color: var(--text); font: 12px/18px ui-monospace, Menlo, Consolas, monospace; text-align: center;
+}
+code { color: var(--orange); font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+button {
+  font: inherit; color: var(--text); background: #1f1f1f;
+  border: 1px solid #3a3a3a; border-radius: 6px; padding: 6px 10px; cursor: pointer;
+}
+button:hover { border-color: #666; }
+button.sel, button.on { background: var(--orange); color: #000; border-color: var(--orange); }
+button.primary { border-color: var(--orange); color: var(--orange); }
+
+#editor-panel { margin-top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+#editor-panel .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+#ed-count { min-width: 56px; text-align: center; }
+#ed-name {
+  flex: 1 1 160px; min-width: 0; font: inherit; color: var(--text); background: #0f0f0f;
+  border: 1px solid #3a3a3a; border-radius: 6px; padding: 6px 8px;
+}
+#ed-text {
+  display: block; width: 100%; max-width: 100%; font: 13px/1.25 ui-monospace, Menlo, Consolas, monospace;
+  background: #000; color: #fff; border: 1px solid #3a3a3a; border-radius: 6px; padding: 8px; white-space: pre; overflow-x: auto;
+}
+
+/* 터치 컨트롤: 터치 기기에서만 보인다 */
+#touch-pad { display: none; }
+body.touch #touch-pad {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px;
+  user-select: none; -webkit-user-select: none;
+}
+body.touch #touch-pad button { touch-action: none; }
+.pad { display: grid; grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(3, 44px); gap: 4px; }
+.pad .up { grid-column: 2; grid-row: 1; }
+.pad .left { grid-column: 1; grid-row: 2; }
+.pad .right { grid-column: 3; grid-row: 2; }
+.pad .down { grid-column: 2; grid-row: 3; }
+.pad button { font-size: 18px; padding: 0; }
+.mid { display: flex; flex-direction: column; gap: 6px; }
+.mid button { font-size: 12px; padding: 6px 8px; }
+.dig { display: flex; flex-direction: column; gap: 8px; }
+.dig button { width: 92px; height: 52px; font-size: 15px; }
+body.touch #play-help .cols, body.touch #play-help .tip { display: none; }
+
+@media (max-width: 420px) {
+  main { padding: 16px 16px 24px; }
+  .pad { grid-template-columns: repeat(3, 46px); grid-template-rows: repeat(3, 40px); }
+  .dig button { width: 80px; }
+}
