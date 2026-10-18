@@ -1,5 +1,7 @@
 # 내 스케줄 (MySchedule)
 
+> 이 저장소에는 웹 게임 [Lode Runner — Apple II 웹 에디션](lode-runner/README.md)도 들어 있습니다 (`lode-runner/index.html`).
+
 개인 일정 관리를 위한 안드로이드 앱입니다. Kotlin + Jetpack Compose(Material 3) + Room으로 만들었습니다.
 
 ## 기능

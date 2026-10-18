@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Lode Runner — Apple II Web Edition</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main>
+  <div id="screen-wrap">
+    <canvas id="screen" width="280" height="192" aria-label="Lode Runner 게임 화면"></canvas>
+  </div>
+
+  <div id="touch-pad" aria-hidden="true">
+    <div class="pad">
+      <button type="button" data-key="U" class="up">▲</button>
+      <button type="button" data-key="L" class="left">◀</button>
+      <button type="button" data-key="R" class="right">▶</button>
+      <button type="button" data-key="D" class="down">▼</button>
+    </div>
+    <div class="mid">
+      <button type="button" data-cmd="start">시작</button>
+      <button type="button" data-cmd="pause">일시정지</button>
+      <button type="button" data-cmd="abort">포기</button>
+    </div>
+    <div class="dig">
+      <button type="button" data-key="DL">◣ 파기</button>
+      <button type="button" data-key="DR">파기 ◢</button>
+    </div>
+  </div>
+
+  <section id="play-help">
+    <h1>LODE RUNNER</h1>
+    <p class="sub">Apple II (1983) 오리지널 판을 재현한 웹 버전 · 모든 금을 모으면 나타나는 사다리로 화면 맨 위까지 올라가세요.</p>
+    <div class="cols">
+      <table>
+        <tr><th>이동</th><td><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> 또는 <kbd>J</kbd><kbd>L</kbd><kbd>I</kbd><kbd>K</kbd></td></tr>
+        <tr><th>왼쪽 파기</th><td><kbd>Z</kbd> 또는 <kbd>U</kbd></td></tr>
+        <tr><th>오른쪽 파기</th><td><kbd>X</kbd> 또는 <kbd>O</kbd></td></tr>
+        <tr><th>일시정지</th><td><kbd>Esc</kbd> / <kbd>P</kbd> (정지 중 <kbd>Q</kbd>: 종료)</td></tr>
+        <tr><th>포기 (목숨 1개)</th><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td></tr>
+        <tr><th>속도 / 소리</th><td><kbd>+</kbd> <kbd>-</kbd> (<span id="hud-speed">4/6</span>) · <kbd>M</kbd> (<span id="hud-sound">켬</span>)</td></tr>
+      </table>
+      <table>
+        <tr><th>타이틀</th><td><kbd>Enter</kbd> 시작 · <kbd>←</kbd><kbd>→</kbd> 시작 레벨 선택</td></tr>
+        <tr><th>에디터</th><td><kbd>E</kbd> 레벨 에디터 · <kbd>C</kbd> 내가 만든 레벨 플레이</td></tr>
+        <tr><th>점수</th><td>금 250 · 경비병 가두기 75 · 처치 75 · 레벨 클리어 1500</td></tr>
+        <tr><th>보너스</th><td>레벨을 클리어할 때마다 목숨 +1</td></tr>
+      </table>
+    </div>
+    <p class="tip">팁: 경비병 앞에 구멍을 파서 가둔 뒤 머리를 밟고 지나가세요. 구멍이 다시 메워질 때 안에 있는 경비병은 사라졌다가 맨 위에서 다시 나타납니다. 구멍 속에 갇힌 채 벽돌이 메워지면 러너도 목숨을 잃습니다.</p>
+  </section>
+
+  <section id="editor-panel" hidden>
+    <div class="row">
+      <button type="button" data-ed="prev">◀</button>
+      <span id="ed-count">1 / 1</span>
+      <button type="button" data-ed="next">▶</button>
+      <input id="ed-name" type="text" maxlength="30" placeholder="레벨 이름" aria-label="레벨 이름">
+    </div>
+    <div id="ed-tools" class="row tools"></div>
+    <div class="row">
+      <button type="button" data-ed="test" class="primary">▶ 테스트 플레이 (T)</button>
+      <button type="button" data-ed="new">새 레벨</button>
+      <button type="button" data-ed="dup">복제</button>
+      <button type="button" data-ed="copyMain">기본 레벨 복사</button>
+      <button type="button" data-ed="clear">전체 지우기</button>
+      <button type="button" data-ed="del">삭제</button>
+    </div>
+    <div class="row">
+      <button type="button" data-ed="export">내보내기</button>
+      <button type="button" data-ed="import">가져오기</button>
+      <button type="button" data-ed="exit">타이틀로 (Esc)</button>
+    </div>
+    <p id="ed-msg"></p>
+    <textarea id="ed-text" rows="16" cols="30" spellcheck="false" hidden></textarea>
+    <p class="legend">맵 문자: <code>#</code> 벽돌 · <code>@</code> 콘크리트 · <code>H</code> 사다리 · <code>-</code> 밧줄 · <code>X</code> 함정 · <code>S</code> 숨은 사다리 · <code>$</code> 금 · <code>0</code> 경비병 · <code>&amp;</code> 플레이어 — 변경 사항은 브라우저에 자동 저장됩니다.</p>
+  </section>
+</main>
+<script src="js/levels.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
