@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스튜디오 프롬프터</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&family=Nanum+Gothic:wght@400;700&family=Nanum+Myeongjo:wght@400;700&family=Black+Han+Sans&family=Gowun+Dodum&family=Noto+Serif+KR:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #000000;
+    --fg: #ffffff;
+    --font-size: 64px;
+    --text-width: 80%;
+    --font: "Noto Sans KR", sans-serif;
+    --align: left;
+    --line-height: 1.5;
+    --bar-bg: rgba(28, 28, 30, 0.94);
+    --bar-fg: #f2f2f7;
+    --bar-muted: #9a9aa0;
+    --bar-line: rgba(255, 255, 255, 0.12);
+    --accent: #0a84ff;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+    color: var(--bar-fg);
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  /* ---------- 대본 표시 영역 ---------- */
+  #display {
+    position: fixed; inset: 0; background: var(--bg); overflow: hidden;
+    cursor: default; user-select: none;
+  }
+  #display.mirror-x #content { transform: scaleX(-1); }
+  #display.mirror-y #content { transform: scaleY(-1); }
+  #display.mirror-x.mirror-y #content { transform: scale(-1, -1); }
+  #content { position: absolute; inset: 0; }
+  #script {
+    width: var(--text-width); margin: 0 auto;
+    color: var(--fg); font-family: var(--font); font-size: var(--font-size);
+    line-height: var(--line-height); text-align: var(--align); font-weight: 700;
+    white-space: pre-wrap; will-change: transform;
+  }
+  /* 줄 바꿈: 단어 단위 / 글자 단위 */
+  .wrap-word #script, .wrap-word #editor { word-break: keep-all; overflow-wrap: break-word; }
+  .wrap-char #script, .wrap-char #editor { word-break: break-all; overflow-wrap: anywhere; }
+
+  #readLine {
+    position: absolute; left: 0; right: 0; height: 0; pointer-events: none;
+    border-top: 2px solid rgba(255, 204, 0, 0.6);
+  }
+  #readLine::before, #readLine::after {
+    content: ""; position: absolute; top: -10px; border: 9px solid transparent;
+  }
+  #readLine::before { left: 4px; border-left: 14px solid #ffcc00; }
+  #readLine::after { right: 4px; border-right: 14px solid #ffcc00; }
+  .no-line #readLine { display: none; }
+
+  /* 대본 입력 */
+  #editor {
+    position: fixed; z-index: 5; display: none; resize: none; outline: none;
+    left: 50%; transform: translateX(-50%); width: var(--text-width);
+    background: var(--bg); color: var(--fg); border: 2px dashed rgba(127, 127, 127, 0.6); border-radius: 8px;
+    font-family: var(--font); font-size: var(--font-size); line-height: var(--line-height);
+    text-align: var(--align); font-weight: 700; padding: 12px 16px; white-space: pre-wrap;
+    caret-color: var(--accent);
+  }
+  body.editing #editor { display: block; }
+  body.editing #display { visibility: hidden; }
+
+  /* ---------- 도구 막대 ---------- */
+  .bar {
+    position: fixed; left: 0; right: 0; z-index: 10;
+    background: var(--bar-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px;
+    padding: 8px 14px; font-size: 14px;
+    transition: opacity .3s, transform .3s;
+  }
+  #topBar { top: 0; border-bottom: 1px solid var(--bar-line); }
+  #bottomBar { bottom: 0; border-top: 1px solid var(--bar-line); }
+  body.playing.hide-bars:not(.show-bars) #topBar { opacity: 0; transform: translateY(-100%); pointer-events: none; }
+  body.playing.hide-bars:not(.show-bars) #bottomBar { opacity: 0; transform: translateY(100%); pointer-events: none; }
+  body.playing.hide-bars:not(.show-bars) { cursor: none; }
+
+  .group { display: flex; align-items: center; gap: 6px; }
+  .group > .lbl { color: var(--bar-muted); font-size: 13px; white-space: nowrap; }
+  .sep { width: 1px; align-self: stretch; background: var(--bar-line); }
+  .spacer { flex: 1; }
+
+  input[type=color] {
+    width: 34px; height: 28px; padding: 0; border: 1px solid var(--bar-line); border-radius: 6px; background: none;
+  }
+  input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+  input[type=color]::-webkit-color-swatch { border: 0; border-radius: 4px; }
+  input[type=range] { width: 110px; accent-color: var(--accent); }
+  input[type=number], select, input.time {
+    background: rgba(255, 255, 255, 0.08); border: 1px solid var(--bar-line); border-radius: 6px; padding: 4px 6px;
+  }
+  input[type=number] { width: 64px; }
+  input.time { width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
+  select option { color: #000; }
+  output { min-width: 44px; font-variant-numeric: tabular-nums; color: var(--bar-muted); font-size: 13px; }
+
+  .seg { display: inline-flex; border: 1px solid var(--bar-line); border-radius: 7px; overflow: hidden; }
+  .seg button {
+    border: 0; background: transparent; padding: 4px 10px; min-width: 34px; font-size: 13px;
+  }
+  .seg button + button { border-left: 1px solid var(--bar-line); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+
+  .btn {
+    border: 1px solid var(--bar-line); background: rgba(255, 255, 255, 0.08); border-radius: 7px;
+    padding: 5px 12px; white-space: nowrap;
+  }
+  .btn:hover { background: rgba(255, 255, 255, 0.16); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; min-width: 92px; }
+  .btn.on { background: #30d158; border-color: #30d158; color: #000; }
+  .swatches { display: inline-flex; gap: 4px; }
+  .swatches button {
+    width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--bar-line); padding: 0;
+  }
+
+  #info { font-variant-numeric: tabular-nums; color: var(--bar-muted); font-size: 13px; white-space: nowrap; }
+  #info b { color: var(--bar-fg); font-weight: 600; }
+  #progress { position: absolute; left: 0; top: -2px; height: 2px; background: var(--accent); width: 0; }
+
+  #toast {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 50;
+    background: rgba(0, 0, 0, .82); color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 16px;
+    opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+
+  @media (max-width: 760px) {
+    .bar { gap: 6px 10px; font-size: 13px; }
+    input[type=range] { width: 80px; }
+  }
+</style>
+</head>
+<body class="wrap-word hide-bars">
+
+<!-- ===== 상단: 표시 설정 ===== -->
+<header class="bar" id="topBar">
+  <div class="group">
+    <span class="lbl">배경색</span>
+    <input type="color" id="bgColor" title="배경색">
+    <span class="lbl">글자색</span>
+    <input type="color" id="fgColor" title="글자색">
+    <span class="swatches" id="presets" title="색 조합">
+      <button type="button" data-bg="#000000" data-fg="#ffffff" style="background:linear-gradient(135deg,#000 50%,#fff 50%)" aria-label="검정 배경/흰 글자"></button>
+      <button type="button" data-bg="#000000" data-fg="#ffd60a" style="background:linear-gradient(135deg,#000 50%,#ffd60a 50%)" aria-label="검정 배경/노란 글자"></button>
+      <button type="button" data-bg="#ffffff" data-fg="#000000" style="background:linear-gradient(135deg,#fff 50%,#000 50%)" aria-label="흰 배경/검정 글자"></button>
+      <button type="button" data-bg="#0b1f4d" data-fg="#ffffff" style="background:linear-gradient(135deg,#0b1f4d 50%,#fff 50%)" aria-label="남색 배경/흰 글자"></button>
+    </span>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <span class="lbl">글자 크기</span>
+    <input type="range" id="fontSizeRange" min="16" max="200" step="2">
+    <input type="number" id="fontSize" min="16" max="200" step="2" title="글자 크기(px)">
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <span class="lbl">글자 영역 폭</span>
+    <input type="range" id="textWidth" min="20" max="100" step="1">
+    <output id="textWidthOut"></output>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <span class="lbl">폰트</span>
+    <select id="fontFamily" title="폰트">
+      <option value='"Noto Sans KR", sans-serif'>본고딕 (Noto Sans KR)</option>
+      <option value='"Nanum Gothic", sans-serif'>나눔고딕</option>
+      <option value='"Malgun Gothic", "Apple SD Gothic Neo", sans-serif'>맑은 고딕 / 시스템</option>
+      <option value='"Gowun Dodum", sans-serif'>고운돋움</option>
+      <option value='"Black Han Sans", sans-serif'>검은고딕 (Black Han Sans)</option>
+      <option value='"Nanum Myeongjo", serif'>나눔명조</option>
+      <option value='"Noto Serif KR", serif'>본명조 (Noto Serif KR)</option>
+      <option value='Arial, Helvetica, sans-serif'>Arial</option>
+      <option value='Georgia, "Times New Roman", serif'>Georgia</option>
+      <option value='"Courier New", monospace'>Courier New</option>
+    </select>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <span class="lbl">정렬</span>
+    <div class="seg" id="alignSeg" role="group" aria-label="정렬">
+      <button type="button" data-align="left" title="왼쪽 정렬">왼쪽</button>
+      <button type="button" data-align="center" title="가운데 정렬">가운데</button>
+      <button type="button" data-align="right" title="오른쪽 정렬">오른쪽</button>
+    </div>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <span class="lbl">반전</span>
+    <div class="seg" role="group" aria-label="반전">
+      <button type="button" id="mirrorX" title="좌우 반전 (프롬프터 반사 유리용, 단축키 M)">좌우</button>
+      <button type="button" id="mirrorY" title="상하 반전">상하</button>
+    </div>
+  </div>
+</header>
+
+<!-- ===== 대본 표시 ===== -->
+<main id="display" aria-label="대본">
+  <div id="content"><div id="script"></div></div>
+  <div id="readLine"></div>
+</main>
+
+<textarea id="editor" spellcheck="false" placeholder="여기에 대본을 입력하거나 붙여넣으세요 (Ctrl+V).&#10;입력을 마치면 [입력 완료] 또는 Esc를 누르세요."></textarea>
+
+<!-- ===== 하단: 진행 제어 ===== -->
+<footer class="bar" id="bottomBar">
+  <div id="progress"></div>
+  <div class="group">
+    <span class="lbl">줄 바꿈</span>
+    <div class="seg" id="wrapSeg" role="group" aria-label="줄 바꿈">
+      <button type="button" data-wrap="word" title="단어가 잘리지 않게 줄 바꿈">단어 단위</button>
+      <button type="button" data-wrap="char" title="글자 단위로 줄 바꿈">글자 단위</button>
+    </div>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <span class="lbl">스크롤</span>
+    <div class="seg" id="modeSeg" role="group" aria-label="스크롤 방식">
+      <button type="button" data-mode="speed" title="속도로 지정">속도</button>
+      <button type="button" data-mode="time" title="전체 낭독 시간으로 지정">시간</button>
+    </div>
+    <span id="speedCtl" class="group">
+      <input type="range" id="speed" min="0.5" max="20" step="0.5" title="스크롤 속도 (↑/↓)">
+      <output id="speedOut"></output>
+    </span>
+    <span id="timeCtl" class="group">
+      <input class="time" id="totalTime" placeholder="분:초" title="대본 전체를 이 시간 안에 스크롤 (예: 3:30)">
+      <span class="lbl">동안</span>
+    </span>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button type="button" class="btn primary" id="playBtn" title="스크롤 시작/정지 (Space)">▶ 시작</button>
+    <button type="button" class="btn" id="resetBtn" title="처음으로 (Home)">⏮ 처음</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button type="button" class="btn" id="editBtn" title="대본 직접 입력 (E)">✎ 대본 입력</button>
+    <button type="button" class="btn" id="pasteBtn" title="클립보드의 대본으로 바꾸기">📋 붙여넣기</button>
+    <label class="btn" title="텍스트 파일 불러오기">📂 열기<input type="file" id="fileInput" accept=".txt,text/plain" hidden></label>
+  </div>
+  <div class="spacer"></div>
+  <div class="group">
+    <span id="info"></span>
+    <button type="button" class="btn" id="fsBtn" title="전체 화면 (F)">⛶ 전체 화면</button>
+  </div>
+</footer>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const root = document.documentElement;
+  const body = document.body;
+  const STORE_KEY = 'studio-prompter:v1';
+
+  const SAMPLE =
+`스튜디오 프롬프터입니다.
+
+아래쪽 [✎ 대본 입력] 버튼을 누르거나, 대본을 복사한 뒤 [📋 붙여넣기]를 누르세요.
+
+스페이스 키로 스크롤을 시작하고 멈출 수 있습니다.
+
+위쪽 도구 막대에서 배경색과 글자색, 글자 크기, 글자 영역 폭, 폰트, 정렬을 바꿀 수 있습니다.
+
+아래쪽 도구 막대에서 줄 바꿈 방식(단어 단위 / 글자 단위)과 스크롤 속도 또는 전체 시간을 정합니다.
+
+노란 선이 읽는 위치입니다.
+
+프롬프터 반사 유리를 쓰는 경우 위쪽의 [좌우] 반전을 켜세요.`;
+
+  const defaults = {
+    script: SAMPLE,
+    bg: '#000000', fg: '#ffffff',
+    fontSize: 64, textWidth: 80,
+    font: '"Noto Sans KR", sans-serif',
+    align: 'left',
+    wrap: 'word',
+    mode: 'speed', speed: 4, totalTime: 180,
+    mirrorX: false, mirrorY: false,
+  };
+  const state = (() => {
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem(STORE_KEY) || '{}') }; }
+    catch { return { ...defaults }; }
+  })();
+  let saveTimer;
+  const save = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {} }, 250);
+  };
+
+  const display = $('display'), scriptEl = $('script'), editor = $('editor'), readLine = $('readLine');
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1600);
+  }
+
+  // ---------- 레이아웃 ----------
+  // 읽는 위치: 상단 막대 바로 아래 + 화면 높이의 약 1/4 지점
+  function readY() {
+    const top = $('topBar').offsetHeight;
+    return Math.round(top + (window.innerHeight - top - $('bottomBar').offsetHeight) * 0.25);
+  }
+  function layout() {
+    const y = readY();
+    readLine.style.top = y + 'px';
+    const lineH = state.fontSize * 1.5;
+    // 첫 줄이 읽는 위치에서 시작하고, 마지막 줄이 읽는 위치까지 올라가도록 여백
+    scriptEl.style.paddingTop = Math.max(0, y - lineH * 0.75) + 'px';
+    scriptEl.style.paddingBottom = Math.max(0, window.innerHeight - y - lineH * 0.25) + 'px';
+    const top = $('topBar').offsetHeight + 12;
+    editor.style.top = top + 'px';
+    editor.style.height = (window.innerHeight - top - $('bottomBar').offsetHeight - 12) + 'px';
+    clampOffset(); render();
+  }
+
+  function applyStyle() {
+    root.style.setProperty('--bg', state.bg);
+    root.style.setProperty('--fg', state.fg);
+    root.style.setProperty('--font-size', state.fontSize + 'px');
+    root.style.setProperty('--text-width', state.textWidth + '%');
+    root.style.setProperty('--font', state.font);
+    root.style.setProperty('--align', state.align);
+    body.classList.toggle('wrap-word', state.wrap === 'word');
+    body.classList.toggle('wrap-char', state.wrap === 'char');
+    display.classList.toggle('mirror-x', state.mirrorX);
+    display.classList.toggle('mirror-y', state.mirrorY);
+
+    $('bgColor').value = state.bg; $('fgColor').value = state.fg;
+    $('fontSize').value = state.fontSize; $('fontSizeRange').value = state.fontSize;
+    $('textWidth').value = state.textWidth; $('textWidthOut').textContent = state.textWidth + '%';
+    $('fontFamily').value = state.font;
+    pressOnly('#alignSeg [data-align]', (b) => b.dataset.align === state.align);
+    pressOnly('#wrapSeg [data-wrap]', (b) => b.dataset.wrap === state.wrap);
+    pressOnly('#modeSeg [data-mode]', (b) => b.dataset.mode === state.mode);
+    $('mirrorX').setAttribute('aria-pressed', String(state.mirrorX));
+    $('mirrorY').setAttribute('aria-pressed', String(state.mirrorY));
+    $('speed').value = state.speed; $('speedOut').textContent = state.speed.toFixed(1);
+    $('speedCtl').hidden = state.mode !== 'speed';
+    $('timeCtl').hidden = state.mode !== 'time';
+    if (document.activeElement !== $('totalTime')) $('totalTime').value = fmtTime(state.totalTime);
+    layout();
+  }
+  function pressOnly(sel, test) {
+    document.querySelectorAll(sel).forEach((b) => b.setAttribute('aria-pressed', String(test(b))));
+  }
+  function set(patch) { Object.assign(state, patch); applyStyle(); save(); }
+
+  function setScript(text) {
+    state.script = text;
+    scriptEl.textContent = text.trim() ? text : '대본이 없습니다. [✎ 대본 입력]을 눌러 입력하세요.';
+    save(); layout();
+  }
+
+  // ---------- 시간 ----------
+  function fmtTime(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+    const mm = String(m).padStart(h ? 2 : 1, '0'), ss = String(s).padStart(2, '0');
+    return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+  // "3:30", "1:02:00", "90"(초), "3분 30초" 모두 허용
+  function parseTime(str) {
+    str = String(str).trim();
+    const ko = str.match(/^(?:(\d+)\s*시간)?\s*(?:(\d+)\s*분)?\s*(?:(\d+)\s*초)?$/);
+    if (ko && (ko[1] || ko[2] || ko[3])) return (+ko[1] || 0) * 3600 + (+ko[2] || 0) * 60 + (+ko[3] || 0);
+    if (!/^\d+(:\d{1,2}){0,2}$/.test(str)) return null;
+    return str.split(':').reduce((acc, n) => acc * 60 + Number(n), 0);
+  }
+
+  // ---------- 스크롤 ----------
+  let offset = 0, playing = false, lastTs = 0;
+  const maxOffset = () => Math.max(0, scriptEl.offsetHeight - window.innerHeight);
+  const clampOffset = () => { offset = Math.min(Math.max(0, offset), maxOffset()); };
+
+  // 초당 이동 px
+  function pxPerSec() {
+    if (state.mode === 'time') return maxOffset() / Math.max(1, state.totalTime);
+    return state.speed * state.fontSize * 0.4;
+  }
+
+  function render() {
+    scriptEl.style.transform = `translateY(${-offset}px)`;
+    const max = maxOffset();
+    const pct = max ? offset / max : 0;
+    $('progress').style.width = (pct * 100).toFixed(2) + '%';
+    const v = pxPerSec();
+    const total = v ? max / v : 0, left = v ? (max - offset) / v : 0;
+    $('info').innerHTML = `<b>${Math.round(pct * 100)}%</b> · 남은 시간 <b>${fmtTime(left)}</b> / 전체 ${fmtTime(total)}`;
+  }
+
+  function tick(ts) {
+    if (!playing) return;
+    const dt = lastTs ? Math.min(0.1, (ts - lastTs) / 1000) : 0;
+    lastTs = ts;
+    offset += pxPerSec() * dt;
+    if (offset >= maxOffset()) {
+      offset = maxOffset(); render(); setPlaying(false); toast('대본 끝'); return;
+    }
+    render();
+    requestAnimationFrame(tick);
+  }
+
+  function setPlaying(on) {
+    if (on && body.classList.contains('editing')) finishEdit();
+    if (on && offset >= maxOffset()) offset = 0;
+    playing = on;
+    body.classList.toggle('playing', on);
+    $('playBtn').textContent = on ? '❚❚ 정지' : '▶ 시작';
+    $('playBtn').classList.toggle('on', on);
+    if (on) { lastTs = 0; requestAnimationFrame(tick); }
+    wakeLock(on);
+  }
+  const toggle = () => setPlaying(!playing);
+
+  function nudge(lines) {
+    offset += lines * state.fontSize * 1.5;
+    clampOffset(); render();
+  }
+
+  // 재생 중 마우스를 움직이면 도구 막대 잠깐 표시
+  let barTimer;
+  document.addEventListener('mousemove', () => {
+    if (!playing) return;
+    body.classList.add('show-bars');
+    clearTimeout(barTimer);
+    barTimer = setTimeout(() => body.classList.remove('show-bars'), 2000);
+  });
+
+  // 마우스 휠/드래그로 위치 조정, 클릭으로 시작/정지
+  display.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    offset += state.mirrorY ? -e.deltaY : e.deltaY; clampOffset(); render();
+  }, { passive: false });
+  let drag = null;
+  display.addEventListener('pointerdown', (e) => {
+    drag = { y: e.clientY, off: offset, moved: false };
+    display.setPointerCapture(e.pointerId);
+  });
+  display.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    let dy = e.clientY - drag.y;
+    if (state.mirrorY) dy = -dy;
+    if (Math.abs(dy) > 5) drag.moved = true;
+    if (drag.moved) { offset = drag.off - dy; clampOffset(); render(); }
+  });
+  const endDrag = () => { if (drag && !drag.moved) toggle(); drag = null; lastTs = 0; };
+  display.addEventListener('pointerup', endDrag);
+  display.addEventListener('pointercancel', () => { drag = null; });
+
+  // ---------- 대본 입력 ----------
+  function startEdit() {
+    setPlaying(false);
+    editor.value = state.script;
+    body.classList.add('editing');
+    $('editBtn').textContent = '✔ 입력 완료';
+    $('editBtn').classList.add('on');
+    editor.focus();
+  }
+  function finishEdit() {
+    if (!body.classList.contains('editing')) return;
+    body.classList.remove('editing');
+    $('editBtn').textContent = '✎ 대본 입력';
+    $('editBtn').classList.remove('on');
+    setScript(editor.value);
+    editor.blur();
+  }
+  $('editBtn').addEventListener('click', () => body.classList.contains('editing') ? finishEdit() : startEdit());
+  editor.addEventListener('input', () => { state.script = editor.value; save(); });
+
+  function replaceScript(text) {
+    setScript(text.replace(/\r\n?/g, '\n'));
+    offset = 0; render();
+    if (body.classList.contains('editing')) editor.value = state.script;
+  }
+  $('pasteBtn').addEventListener('click', async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) { toast('클립보드가 비어 있습니다.'); return; }
+      replaceScript(text); toast('대본을 붙여넣었습니다.');
+    } catch {
+      // 클립보드 권한이 없으면 입력 화면에서 Ctrl+V로 붙여넣도록 안내
+      startEdit(); editor.select();
+      toast('Ctrl+V(⌘+V)로 붙여넣으세요.');
+    }
+  });
+  // 입력 화면이 아닐 때 Ctrl+V 하면 대본을 바로 교체
+  document.addEventListener('paste', (e) => {
+    if (body.classList.contains('editing') || e.target.matches('input, textarea')) return;
+    const text = e.clipboardData && e.clipboardData.getData('text/plain');
+    if (!text || !text.trim()) return;
+    e.preventDefault();
+    if (state.script.trim() && state.script !== SAMPLE && !confirm('지금 대본을 붙여넣은 내용으로 바꿀까요?')) return;
+    replaceScript(text); toast('대본을 붙여넣었습니다.');
+  });
+  $('fileInput').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    replaceScript(await f.text()); toast(f.name + ' 불러옴');
+    e.target.value = '';
+  });
+
+  // ---------- 상단 설정 ----------
+  $('bgColor').addEventListener('input', (e) => set({ bg: e.target.value }));
+  $('fgColor').addEventListener('input', (e) => set({ fg: e.target.value }));
+  $('presets').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (b) set({ bg: b.dataset.bg, fg: b.dataset.fg });
+  });
+  const setFont = (v) => { v = Number(v); if (v >= 16 && v <= 200) set({ fontSize: v }); };
+  $('fontSizeRange').addEventListener('input', (e) => setFont(e.target.value));
+  $('fontSize').addEventListener('change', (e) => {
+    setFont(Math.min(200, Math.max(16, Number(e.target.value) || state.fontSize)));
+  });
+  $('textWidth').addEventListener('input', (e) => set({ textWidth: Number(e.target.value) }));
+  $('fontFamily').addEventListener('change', (e) => {
+    set({ font: e.target.value });
+    // 웹 폰트가 늦게 로드되면 줄 높이가 바뀌므로 다시 계산
+    document.fonts && document.fonts.ready.then(layout);
+  });
+  $('alignSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-align]'); if (b) set({ align: b.dataset.align });
+  });
+  $('mirrorX').addEventListener('click', () => set({ mirrorX: !state.mirrorX }));
+  $('mirrorY').addEventListener('click', () => set({ mirrorY: !state.mirrorY }));
+
+  // ---------- 하단 설정 ----------
+  $('wrapSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-wrap]'); if (b) set({ wrap: b.dataset.wrap });
+  });
+  $('modeSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mode]'); if (b) set({ mode: b.dataset.mode });
+  });
+  $('speed').addEventListener('input', (e) => set({ speed: Number(e.target.value) }));
+  const commitTime = () => {
+    const sec = parseTime($('totalTime').value);
+    if (sec && sec > 0) set({ totalTime: sec });
+    else { toast('시간 형식: 3:30 또는 3분 30초'); }
+    $('totalTime').value = fmtTime(state.totalTime);
+  };
+  $('totalTime').addEventListener('change', commitTime);
+  $('totalTime').addEventListener('keydown', (e) => { if (e.key === 'Enter') { commitTime(); e.target.blur(); } });
+  function changeSpeed(dir) {
+    if (state.mode === 'time') set({ totalTime: Math.max(10, state.totalTime - dir * 10) });
+    else set({ speed: Math.min(20, Math.max(0.5, state.speed + dir * 0.5)) });
+    toast(state.mode === 'time' ? '전체 ' + fmtTime(state.totalTime) : '속도 ' + state.speed.toFixed(1));
+  }
+
+  $('playBtn').addEventListener('click', toggle);
+  $('resetBtn').addEventListener('click', () => { offset = 0; render(); });
+  $('fsBtn').addEventListener('click', toggleFullscreen);
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else root.requestFullscreen && root.requestFullscreen().catch(() => toast('전체 화면을 사용할 수 없습니다.'));
+  }
+
+  // 버튼 클릭 후 포커스가 남아 있으면 스페이스가 버튼을 다시 누르므로 포커스 해제
+  document.querySelectorAll('.bar button').forEach((b) => b.addEventListener('mouseup', () => b.blur()));
+
+  // ---------- 키보드 ----------
+  document.addEventListener('keydown', (e) => {
+    if (body.classList.contains('editing')) {
+      if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); finishEdit(); }
+      return;
+    }
+    const t = e.target;
+    const typing = t.matches('input[type=number], input.time, select, textarea');
+    if (typing) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    switch (e.key) {
+      case ' ': case 'Spacebar': e.preventDefault(); toggle(); break;
+      case 'ArrowUp': e.preventDefault(); changeSpeed(+1); break;
+      case 'ArrowDown': e.preventDefault(); changeSpeed(-1); break;
+      case 'ArrowLeft': case 'PageUp': e.preventDefault(); nudge(-2); break;
+      case 'ArrowRight': case 'PageDown': e.preventDefault(); nudge(2); break;
+      case 'Home': e.preventDefault(); offset = 0; render(); break;
+      case 'End': e.preventDefault(); offset = maxOffset(); render(); break;
+      case 'e': case 'E': e.preventDefault(); startEdit(); break;
+      case 'f': case 'F': toggleFullscreen(); break;
+      case 'm': case 'M': set({ mirrorX: !state.mirrorX }); break;
+      case '+': case '=': setFont(Math.min(200, state.fontSize + 4)); break;
+      case '-': case '_': setFont(Math.max(16, state.fontSize - 4)); break;
+    }
+  });
+
+  // ---------- 화면 꺼짐 방지 ----------
+  let lock = null;
+  async function wakeLock(on) {
+    try {
+      if (on && !lock && 'wakeLock' in navigator) {
+        lock = await navigator.wakeLock.request('screen');
+        lock.addEventListener('release', () => { lock = null; });
+      } else if (!on && lock) { await lock.release(); lock = null; }
+    } catch {}
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && playing) wakeLock(true); });
+
+  window.addEventListener('resize', layout);
+  if (document.fonts) document.fonts.ready.then(layout);
+
+  setScript(state.script);
+  applyStyle();
+})();
+</script>
+</body>
+</html>
