@@ -27,9 +27,9 @@
   let timer = null;
   let running = false;
   let paused = false;
-  let animating = false;
+  let nextDue = 0;           // 다음 이동 예정 시각 (performance.now 기준)
+  let remaining = 0;         // 일시정지 시점에 남아 있던 대기 시간
   let geom = null;
-  let animDuration = 750;
 
   // 이동 시간을 0.1초 단위로 맞추고 범위 안으로 제한
   function clampTime(value) {
@@ -157,58 +157,64 @@
     updateButtons();
   }
 
-  function animateMove(from, to, done) {
+  // 원반 하나를 옮긴다. 상태(pegs, step)는 즉시 확정하고,
+  // 애니메이션은 화면 표시용으로만 사용한다. (탭이 숨겨져 애니메이션이
+  // 멈춰도 상태가 어긋나지 않도록)
+  function doMove(animate) {
+    const [from, to] = moves[step];
     const diskNo = pegs[from].pop();
     const el = disks[diskNo];
     const start = diskPos(diskNo, from, pegs[from].length);
     const end = diskPos(diskNo, to, pegs[to].length);
     pegs[to].push(diskNo);
+    step++;
 
-    // 위로 들기 → 옆으로 이동 → 내려놓기
-    const lift = geom.liftY;
-    const frames = [
-      { left: start.left + 'px', bottom: start.bottom + 'px' },
-      { left: start.left + 'px', bottom: lift + 'px', offset: 0.33 },
-      { left: end.left + 'px', bottom: lift + 'px', offset: 0.67 },
-      { left: end.left + 'px', bottom: end.bottom + 'px' },
-    ];
+    // 진행 중이던 애니메이션은 정리하고 최종 위치를 바로 지정
+    el.getAnimations().forEach(a => a.cancel());
+    el.style.left = end.left + 'px';
+    el.style.bottom = end.bottom + 'px';
 
-    animating = true;
-    animDuration = moveInterval() * ANIM_RATIO;
-    el.classList.add('moving');
-    const anim = el.animate(frames, { duration: animDuration, easing: 'ease-in-out' });
-    anim.onfinish = () => {
-      el.style.left = end.left + 'px';
-      el.style.bottom = end.bottom + 'px';
-      el.classList.remove('moving');
-      animating = false;
-      done(diskNo);
-    };
+    if (animate) {
+      // 위로 들기 → 옆으로 이동 → 내려놓기
+      const lift = geom.liftY;
+      const frames = [
+        { left: start.left + 'px', bottom: start.bottom + 'px' },
+        { left: start.left + 'px', bottom: lift + 'px', offset: 0.33 },
+        { left: end.left + 'px', bottom: lift + 'px', offset: 0.67 },
+        { left: end.left + 'px', bottom: end.bottom + 'px' },
+      ];
+      el.classList.add('moving');
+      const anim = el.animate(frames, { duration: moveInterval() * ANIM_RATIO, easing: 'ease-in-out' });
+      anim.onfinish = anim.oncancel = () => el.classList.remove('moving');
+    }
+
+    moveCountEl.textContent = step;
+    moveInfoEl.textContent = `원반 ${diskNo}: ${PEG_NAMES[from]} → ${PEG_NAMES[to]}`;
   }
 
-  function nextMove() {
+  // 다음 이동 예정 시각(nextDue)까지 밀린 이동을 처리한다.
+  // 백그라운드 탭에서는 타이머가 늦게 불리므로, 실제 흐른 시간만큼
+  // 이동을 한꺼번에(애니메이션 없이) 반영해 진행 속도를 유지한다.
+  function tick() {
     timer = null;
     if (!running || paused) return;
+    const now = performance.now();
+    const interval = moveInterval();
+    while (step < moves.length && now >= nextDue) {
+      const isLatest = now < nextDue + interval; // 지금 시점의 이동인지
+      doMove(isLatest && !document.hidden);
+      nextDue += interval;
+    }
     if (step >= moves.length) {
-      finish();
+      // 마지막 애니메이션이 끝난 뒤 완료 표시
+      timer = setTimeout(finish, document.hidden ? 0 : interval * ANIM_RATIO);
       return;
     }
-    const [from, to] = moves[step];
-    animateMove(from, to, (diskNo) => {
-      step++;
-      moveCountEl.textContent = step;
-      moveInfoEl.textContent = `원반 ${diskNo}: ${PEG_NAMES[from]} → ${PEG_NAMES[to]}`;
-      if (step >= moves.length) {
-        finish();
-      }
-    });
-    // 설정한 이동 시간마다 다음 이동 예약 (실행 중 변경도 다음 이동부터 반영)
-    if (step + 1 < moves.length) {
-      timer = setTimeout(nextMove, moveInterval());
-    }
+    timer = setTimeout(tick, Math.max(0, nextDue - performance.now()));
   }
 
   function finish() {
+    timer = null;
     running = false;
     paused = false;
     moveInfoEl.textContent = `완료! 총 ${moves.length}번 이동했습니다.`;
@@ -221,7 +227,6 @@
     running = false;
     paused = false;
     board.querySelectorAll('.disk').forEach(el => el.getAnimations().forEach(a => a.cancel()));
-    animating = false;
   }
 
   function updateButtons() {
@@ -238,18 +243,21 @@
     paused = false;
     updateButtons();
     moveInfoEl.textContent = '진행 중...';
-    nextMove();
+    nextDue = performance.now();
+    tick();
   });
 
   pauseBtn.addEventListener('click', () => {
     if (!running) return;
     paused = !paused;
+    if (timer) clearTimeout(timer);
+    timer = null;
     if (paused) {
-      if (timer) clearTimeout(timer);
-      timer = null;
+      // 다음 이동까지 남은 시간을 기억해 두었다가 재개할 때 이어서 진행
+      remaining = Math.max(0, nextDue - performance.now());
     } else {
-      // 진행 중인 애니메이션이 끝날 시간을 기다린 뒤 재개
-      timer = setTimeout(nextMove, animating ? animDuration : 0);
+      nextDue = performance.now() + remaining;
+      tick();
     }
     updateButtons();
   });
@@ -264,8 +272,17 @@
     timeInput.value = clampTime(timeInput.value).toFixed(1);
   });
 
-  window.addEventListener('resize', () => {
-    if (!animating) layout();
+  window.addEventListener('resize', layout);
+
+  // 탭으로 돌아오면 밀린 이동을 즉시 반영하고 원반 위치를 다시 맞춤
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    board.querySelectorAll('.disk').forEach(el => el.getAnimations().forEach(a => a.cancel()));
+    if (running && !paused) {
+      if (timer) clearTimeout(timer);
+      tick();
+    }
+    layout();
   });
 
   build();
