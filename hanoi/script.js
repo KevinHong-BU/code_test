@@ -4,7 +4,7 @@
   const MAX_TIME = 5;
   const ANIM_RATIO = 0.75;    // 이동 시간 중 애니메이션이 차지하는 비율
   const MIN_DISKS = 1;
-  const MAX_DISKS = 10;
+  const MAX_DISKS = 15;
   const BASE_TOP_OFFSET = 24; // 보드 아래쪽에서 받침대 윗면까지 거리(px)
 
   const board = document.getElementById('board');
