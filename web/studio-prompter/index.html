@@ -122,6 +122,9 @@
   .btn:hover { background: rgba(255, 255, 255, 0.16); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; min-width: 92px; }
   .btn.on { background: #30d158; border-color: #30d158; color: #000; }
+  #playBtn { background: #ff3b30; border-color: #ff3b30; color: #fff; }
+  #playBtn:hover { background: #ff554b; }
+  #playBtn.on { background: #b3261e; border-color: #ff3b30; }
   .swatches { display: inline-flex; gap: 4px; }
   .swatches button {
     width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--bar-line); padding: 0;
@@ -235,6 +238,12 @@
   </div>
   <div class="sep"></div>
   <div class="group">
+    <span class="lbl">줄 간격</span>
+    <input type="range" id="lineHeight" min="1" max="3" step="0.1" title="줄 간격 ([ / ])">
+    <output id="lineHeightOut"></output>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
     <span class="lbl">스크롤</span>
     <div class="seg" id="modeSeg" role="group" aria-label="스크롤 방식">
       <button type="button" data-mode="speed" title="속도로 지정">속도</button>
@@ -302,6 +311,7 @@
     mode: 'speed', speed: 4, totalTime: 180,
     mirrorX: false, mirrorY: false,
     lineColor: '#ffcc00', showLine: true,
+    lineHeight: 1.5,
   };
   const state = (() => {
     try { return { ...defaults, ...JSON.parse(localStorage.getItem(STORE_KEY) || '{}') }; }
@@ -329,7 +339,7 @@
   function layout() {
     const y = readY();
     readLine.style.top = y + 'px';
-    const lineH = state.fontSize * 1.5;
+    const lineH = state.fontSize * state.lineHeight;
     // 첫 줄이 가운데 기준선에서 시작해 위로 올라가고, 마지막 줄도 기준선까지 올라오도록 여백
     scriptEl.style.paddingTop = Math.max(0, y - lineH / 2) + 'px';
     scriptEl.style.paddingBottom = Math.max(0, window.innerHeight - y - lineH / 2) + 'px';
@@ -346,6 +356,8 @@
     root.style.setProperty('--text-width', state.textWidth + '%');
     root.style.setProperty('--font', state.font);
     root.style.setProperty('--align', state.align);
+    root.style.setProperty('--line-height', state.lineHeight);
+    $('lineHeight').value = state.lineHeight; $('lineHeightOut').textContent = state.lineHeight.toFixed(1) + '배';
     body.classList.toggle('wrap-word', state.wrap === 'word');
     body.classList.toggle('wrap-char', state.wrap === 'char');
     display.classList.toggle('mirror-x', state.mirrorX);
@@ -443,7 +455,7 @@
   const toggle = () => setPlaying(!playing);
 
   function nudge(lines) {
-    offset += lines * state.fontSize * 1.5;
+    offset += lines * state.fontSize * state.lineHeight;
     clampOffset(); render();
   }
 
@@ -560,6 +572,8 @@
   $('modeSeg').addEventListener('click', (e) => {
     const b = e.target.closest('[data-mode]'); if (b) set({ mode: b.dataset.mode });
   });
+  const setLineHeight = (v) => set({ lineHeight: Math.round(Math.min(3, Math.max(1, v)) * 10) / 10 });
+  $('lineHeight').addEventListener('input', (e) => setLineHeight(Number(e.target.value)));
   $('speed').addEventListener('input', (e) => set({ speed: Number(e.target.value) }));
   const commitTime = () => {
     const sec = parseTime($('totalTime').value);
@@ -608,6 +622,8 @@
       case 'f': case 'F': toggleFullscreen(); break;
       case 'm': case 'M': set({ mirrorX: !state.mirrorX }); break;
       case 'l': case 'L': set({ showLine: !state.showLine }); break;
+      case '[': setLineHeight(state.lineHeight - 0.1); break;
+      case ']': setLineHeight(state.lineHeight + 0.1); break;
       case '+': case '=': setFont(Math.min(200, state.fontSize + 4)); break;
       case '-': case '_': setFont(Math.max(16, state.fontSize - 4)); break;
     }
