@@ -1,6 +1,6 @@
 (() => {
-  const TIME_STEP = 0.2;      // 이동 시간 설정 단위 (초)
-  const MIN_TIME = 0.2;
+  const TIME_STEP = 0.1;      // 이동 시간 설정 단위 (초)
+  const MIN_TIME = 0.1;
   const MAX_TIME = 5;
   const ANIM_RATIO = 0.75;    // 이동 시간 중 애니메이션이 차지하는 비율
   const MIN_DISKS = 1;
@@ -31,7 +31,7 @@
   let geom = null;
   let animDuration = 750;
 
-  // 이동 시간을 0.2초 단위로 맞추고 범위 안으로 제한
+  // 이동 시간을 0.1초 단위로 맞추고 범위 안으로 제한
   function clampTime(value) {
     let v = parseFloat(value);
     if (Number.isNaN(v)) v = 1;
