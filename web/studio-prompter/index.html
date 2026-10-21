@@ -21,6 +21,7 @@
     --bar-muted: #9a9aa0;
     --bar-line: rgba(255, 255, 255, 0.12);
     --accent: #0a84ff;
+    --line-color: #ffcc00;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -53,13 +54,13 @@
 
   #readLine {
     position: absolute; left: 0; right: 0; height: 0; pointer-events: none;
-    border-top: 2px solid rgba(255, 204, 0, 0.6);
+    border-top: 2px solid var(--line-color);
   }
   #readLine::before, #readLine::after {
     content: ""; position: absolute; top: -10px; border: 9px solid transparent;
   }
-  #readLine::before { left: 4px; border-left: 14px solid #ffcc00; }
-  #readLine::after { right: 4px; border-right: 14px solid #ffcc00; }
+  #readLine::before { left: 4px; border-left: 14px solid var(--line-color); }
+  #readLine::after { right: 4px; border-right: 14px solid var(--line-color); }
   .no-line #readLine { display: none; }
 
   /* 대본 입력 */
@@ -198,6 +199,14 @@
   </div>
   <div class="sep"></div>
   <div class="group">
+    <span class="lbl">기준선</span>
+    <input type="color" id="lineColor" title="가운데 기준선 색">
+    <div class="seg" role="group" aria-label="기준선 표시">
+      <button type="button" id="lineToggle" title="가운데 기준선 보이기/숨기기 (L)">표시</button>
+    </div>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
     <span class="lbl">반전</span>
     <div class="seg" role="group" aria-label="반전">
       <button type="button" id="mirrorX" title="좌우 반전 (프롬프터 반사 유리용, 단축키 M)">좌우</button>
@@ -279,7 +288,7 @@
 
 아래쪽 도구 막대에서 줄 바꿈 방식(단어 단위 / 글자 단위)과 스크롤 속도 또는 전체 시간을 정합니다.
 
-노란 선이 읽는 위치입니다.
+화면 가운데 선이 읽는 기준선입니다. 선의 색은 위쪽 [기준선]에서 바꿀 수 있습니다.
 
 프롬프터 반사 유리를 쓰는 경우 위쪽의 [좌우] 반전을 켜세요.`;
 
@@ -292,6 +301,7 @@
     wrap: 'word',
     mode: 'speed', speed: 4, totalTime: 180,
     mirrorX: false, mirrorY: false,
+    lineColor: '#ffcc00', showLine: true,
   };
   const state = (() => {
     try { return { ...defaults, ...JSON.parse(localStorage.getItem(STORE_KEY) || '{}') }; }
@@ -312,18 +322,17 @@
   }
 
   // ---------- 레이아웃 ----------
-  // 읽는 위치: 상단 막대 바로 아래 + 화면 높이의 약 1/4 지점
+  // 기준선(읽는 위치): 화면 상하 가운데
   function readY() {
-    const top = $('topBar').offsetHeight;
-    return Math.round(top + (window.innerHeight - top - $('bottomBar').offsetHeight) * 0.25);
+    return Math.round(window.innerHeight / 2);
   }
   function layout() {
     const y = readY();
     readLine.style.top = y + 'px';
     const lineH = state.fontSize * 1.5;
-    // 첫 줄이 읽는 위치에서 시작하고, 마지막 줄이 읽는 위치까지 올라가도록 여백
-    scriptEl.style.paddingTop = Math.max(0, y - lineH * 0.75) + 'px';
-    scriptEl.style.paddingBottom = Math.max(0, window.innerHeight - y - lineH * 0.25) + 'px';
+    // 첫 줄이 가운데 기준선에서 시작해 위로 올라가고, 마지막 줄도 기준선까지 올라오도록 여백
+    scriptEl.style.paddingTop = Math.max(0, y - lineH / 2) + 'px';
+    scriptEl.style.paddingBottom = Math.max(0, window.innerHeight - y - lineH / 2) + 'px';
     const top = $('topBar').offsetHeight + 12;
     editor.style.top = top + 'px';
     editor.style.height = (window.innerHeight - top - $('bottomBar').offsetHeight - 12) + 'px';
@@ -341,6 +350,10 @@
     body.classList.toggle('wrap-char', state.wrap === 'char');
     display.classList.toggle('mirror-x', state.mirrorX);
     display.classList.toggle('mirror-y', state.mirrorY);
+    root.style.setProperty('--line-color', state.lineColor);
+    body.classList.toggle('no-line', !state.showLine);
+    $('lineColor').value = state.lineColor;
+    $('lineToggle').setAttribute('aria-pressed', String(state.showLine));
 
     $('bgColor').value = state.bg; $('fgColor').value = state.fg;
     $('fontSize').value = state.fontSize; $('fontSizeRange').value = state.fontSize;
@@ -535,6 +548,8 @@
   $('alignSeg').addEventListener('click', (e) => {
     const b = e.target.closest('[data-align]'); if (b) set({ align: b.dataset.align });
   });
+  $('lineColor').addEventListener('input', (e) => set({ lineColor: e.target.value, showLine: true }));
+  $('lineToggle').addEventListener('click', () => set({ showLine: !state.showLine }));
   $('mirrorX').addEventListener('click', () => set({ mirrorX: !state.mirrorX }));
   $('mirrorY').addEventListener('click', () => set({ mirrorY: !state.mirrorY }));
 
@@ -592,6 +607,7 @@
       case 'e': case 'E': e.preventDefault(); startEdit(); break;
       case 'f': case 'F': toggleFullscreen(); break;
       case 'm': case 'M': set({ mirrorX: !state.mirrorX }); break;
+      case 'l': case 'L': set({ showLine: !state.showLine }); break;
       case '+': case '=': setFont(Math.min(200, state.fontSize + 4)); break;
       case '-': case '_': setFont(Math.max(16, state.fontSize - 4)); break;
     }
