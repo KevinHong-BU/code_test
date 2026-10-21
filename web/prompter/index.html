@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>카메라 프롬프터</title>
+<style>
+  :root {
+    --bg: #000;
+    --panel: rgba(20, 20, 22, 0.92);
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --accent: #0a84ff;
+    --rec: #ff3b30;
+    --line: rgba(255, 255, 255, 0.14);
+    --font-size: 40px;
+    --text-width: 90%;
+    --overlay-alpha: 0.45;
+    --area-height: 45%;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+    overflow: hidden; -webkit-tap-highlight-color: transparent;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  /* 카메라 */
+  #stage { position: fixed; inset: 0; background: #111; }
+  #camera { width: 100%; height: 100%; object-fit: cover; }
+  #camera.selfie { transform: scaleX(-1); }
+  #noCamera {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--muted);
+  }
+  #noCamera[hidden] { display: none; }
+  #noCamera button {
+    background: var(--accent); border: 0; border-radius: 10px; padding: 10px 18px; color: #fff; font-weight: 600;
+  }
+
+  /* 프롬프터 텍스트 영역 (렌즈와 가까운 상단) */
+  #prompter {
+    position: fixed; left: 0; right: 0; top: 0; height: var(--area-height);
+    background: rgba(0, 0, 0, var(--overlay-alpha));
+    overflow: hidden; touch-action: none; user-select: none;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 12%, #000 80%, transparent 100%);
+            mask-image: linear-gradient(to bottom, transparent 0, #000 12%, #000 80%, transparent 100%);
+  }
+  #prompter.mirror-x #scroller { transform: scaleX(-1); }
+  #prompter.mirror-y { transform: scaleY(-1); }
+  #scroller { position: absolute; inset: 0; overflow: hidden; }
+  #script {
+    width: var(--text-width); margin: 0 auto;
+    font-size: var(--font-size); line-height: 1.45; font-weight: 600;
+    white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8); will-change: transform;
+  }
+  #guide {
+    position: absolute; left: 0; right: 0; height: 0; top: 30%;
+    border-top: 2px dashed rgba(255, 214, 10, 0.55); pointer-events: none;
+  }
+  #guide::before {
+    content: "▶"; position: absolute; left: 6px; top: -0.75em; color: #ffd60a; font-size: 18px;
+  }
+  #prompter.no-guide #guide { display: none; }
+
+  /* 상단 상태 */
+  #status {
+    position: fixed; top: calc(env(safe-area-inset-top) + 10px); right: 12px; z-index: 5;
+    display: flex; gap: 8px; align-items: center; pointer-events: none;
+  }
+  .pill {
+    background: rgba(0, 0, 0, 0.6); border-radius: 999px; padding: 4px 10px; font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  #recPill { display: none; color: #fff; background: var(--rec); }
+  #recPill.on { display: inline-block; animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: 0.6; } }
+
+  #countdown {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    font-size: 30vmin; font-weight: 800; color: #fff; text-shadow: 0 4px 30px rgba(0,0,0,.8);
+    pointer-events: none; z-index: 20;
+  }
+  #countdown.on { display: flex; }
+
+  /* 하단 컨트롤 */
+  #controls {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    padding: 12px 16px calc(env(safe-area-inset-bottom) + 14px);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: linear-gradient(to top, rgba(0,0,0,.75), transparent);
+  }
+  .side { display: flex; gap: 10px; flex: 1; }
+  .side.right { justify-content: flex-end; }
+  .icon-btn {
+    width: 48px; height: 48px; border-radius: 50%; border: 0;
+    background: rgba(255, 255, 255, 0.16); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    display: grid; place-items: center; font-size: 20px; color: #fff;
+  }
+  .icon-btn:active { transform: scale(0.94); }
+  .icon-btn[aria-pressed="true"] { background: var(--accent); }
+  #recBtn {
+    width: 72px; height: 72px; border-radius: 50%; border: 4px solid #fff; background: transparent;
+    display: grid; place-items: center; padding: 0; flex: none;
+  }
+  #recBtn span {
+    width: 56px; height: 56px; border-radius: 50%; background: var(--rec); transition: all .2s;
+  }
+  #recBtn.on span { width: 28px; height: 28px; border-radius: 6px; }
+  #recBtn:disabled { opacity: 0.4; }
+
+  #speedBar {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom) + 102px); z-index: 10;
+    display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.6);
+    border-radius: 999px; padding: 6px 8px;
+  }
+  #speedBar button {
+    width: 32px; height: 32px; border-radius: 50%; border: 0; background: rgba(255,255,255,.16); color: #fff;
+  }
+  #speedLabel { min-width: 64px; text-align: center; font-size: 14px; font-variant-numeric: tabular-nums; }
+
+  /* 시트(대본/설정/결과) */
+  .sheet {
+    position: fixed; inset: 0; z-index: 30; display: none;
+    background: rgba(0, 0, 0, 0.5); align-items: flex-end; justify-content: center;
+  }
+  .sheet.open { display: flex; }
+  .sheet-body {
+    width: 100%; max-width: 640px; max-height: 92vh; overflow: auto;
+    background: var(--panel); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border-radius: 18px 18px 0 0; padding: 16px 16px calc(env(safe-area-inset-bottom) + 16px);
+  }
+  @media (min-width: 700px) {
+    .sheet { align-items: center; }
+    .sheet-body { border-radius: 18px; }
+  }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .sheet-head h2 { margin: 0; font-size: 18px; }
+  .text-btn { background: none; border: 0; color: var(--accent); font-weight: 600; padding: 6px 4px; }
+  textarea#scriptInput {
+    width: 100%; min-height: 45vh; resize: vertical; border-radius: 12px; border: 1px solid var(--line);
+    background: rgba(0,0,0,.35); padding: 12px; font-size: 16px; line-height: 1.6;
+  }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 8px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .row-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .btn {
+    border: 1px solid var(--line); background: rgba(255,255,255,.08); border-radius: 10px;
+    padding: 9px 14px; font-size: 14px; text-decoration: none; display: inline-flex; align-items: center;
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+  .field { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .field:last-child { border-bottom: 0; }
+  .field label { font-size: 15px; }
+  .field output { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .field input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+  .field select { background: rgba(0,0,0,.35); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+  .switch { width: 44px; height: 26px; accent-color: var(--accent); }
+  .section-title { margin: 18px 0 2px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+  #resultVideo { width: 100%; max-height: 55vh; border-radius: 12px; background: #000; }
+  #help { color: var(--muted); font-size: 13px; line-height: 1.7; }
+  kbd { background: rgba(255,255,255,.12); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+
+  #toast {
+    position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 40;
+    background: rgba(0,0,0,.8); padding: 10px 16px; border-radius: 10px; font-size: 15px;
+    opacity: 0; transition: opacity .25s; pointer-events: none; text-align: center; max-width: 80vw;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="camera" class="selfie" playsinline autoplay muted></video>
+  <div id="noCamera" hidden>
+    <div id="noCameraMsg">카메라를 사용하려면 권한이 필요합니다.</div>
+    <button id="retryCamera" type="button">카메라 켜기</button>
+  </div>
+</div>
+
+<div id="prompter" aria-label="프롬프터 텍스트">
+  <div id="scroller"><div id="script"></div></div>
+  <div id="guide"></div>
+</div>
+
+<div id="status">
+  <span id="recPill" class="pill">● REC <span id="recTime">00:00</span></span>
+  <span id="progressPill" class="pill">0%</span>
+</div>
+
+<div id="countdown"></div>
+
+<div id="speedBar">
+  <button id="slower" type="button" aria-label="느리게">−</button>
+  <span id="speedLabel">속도 3.0</span>
+  <button id="faster" type="button" aria-label="빠르게">+</button>
+</div>
+
+<div id="controls">
+  <div class="side">
+    <button class="icon-btn" id="editBtn" type="button" title="대본 편집" aria-label="대본 편집">✎</button>
+    <button class="icon-btn" id="settingsBtn" type="button" title="설정" aria-label="설정">⚙</button>
+  </div>
+  <button id="recBtn" type="button" aria-label="녹화 시작"><span></span></button>
+  <div class="side right">
+    <button class="icon-btn" id="playBtn" type="button" title="스크롤 재생/정지 (Space)" aria-label="스크롤 재생">▶</button>
+    <button class="icon-btn" id="flipBtn" type="button" title="전면/후면 카메라 전환" aria-label="카메라 전환">⟲</button>
+  </div>
+</div>
+
+<!-- 대본 편집 -->
+<div class="sheet" id="editSheet">
+  <div class="sheet-body">
+    <div class="sheet-head">
+      <button class="text-btn" id="clearScript" type="button">지우기</button>
+      <h2>대본</h2>
+      <button class="text-btn" data-close type="button">완료</button>
+    </div>
+    <textarea id="scriptInput" placeholder="여기에 대본을 입력하거나 붙여넣으세요."></textarea>
+    <div class="meta">
+      <span id="scriptStats">0자</span>
+      <span id="scriptEta"></span>
+    </div>
+    <div class="row-actions">
+      <label class="btn">텍스트 파일 열기<input id="fileInput" type="file" accept=".txt,text/plain" hidden></label>
+      <button class="btn" id="pasteBtn" type="button">클립보드에서 붙여넣기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 설정 -->
+<div class="sheet" id="settingsSheet">
+  <div class="sheet-body">
+    <div class="sheet-head">
+      <span></span>
+      <h2>설정</h2>
+      <button class="text-btn" data-close type="button">완료</button>
+    </div>
+
+    <div class="section-title">텍스트</div>
+    <div class="field">
+      <label for="fontSize">글자 크기</label><output id="fontSizeOut"></output>
+      <input id="fontSize" type="range" min="18" max="120" step="2">
+    </div>
+    <div class="field">
+      <label for="textWidth">텍스트 폭</label><output id="textWidthOut"></output>
+      <input id="textWidth" type="range" min="40" max="100" step="5">
+    </div>
+    <div class="field">
+      <label for="areaHeight">프롬프터 영역 높이</label><output id="areaHeightOut"></output>
+      <input id="areaHeight" type="range" min="20" max="100" step="5">
+    </div>
+    <div class="field">
+      <label for="overlay">배경 어둡기</label><output id="overlayOut"></output>
+      <input id="overlay" type="range" min="0" max="90" step="5">
+    </div>
+    <div class="field">
+      <label for="speed">스크롤 속도</label><output id="speedOut"></output>
+      <input id="speed" type="range" min="0.5" max="15" step="0.5">
+    </div>
+    <div class="field">
+      <label for="guideToggle">읽는 위치 표시선</label>
+      <input id="guideToggle" class="switch" type="checkbox">
+    </div>
+    <div class="field">
+      <label for="mirrorX">좌우 반전 (프롬프터 유리용)</label>
+      <input id="mirrorX" class="switch" type="checkbox">
+    </div>
+    <div class="field">
+      <label for="mirrorY">상하 반전</label>
+      <input id="mirrorY" class="switch" type="checkbox">
+    </div>
+
+    <div class="section-title">녹화</div>
+    <div class="field">
+      <label for="countdownSel">녹화 전 카운트다운</label>
+      <select id="countdownSel">
+        <option value="0">없음</option>
+        <option value="3">3초</option>
+        <option value="5">5초</option>
+        <option value="10">10초</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="autoScroll">녹화 시작 시 자동 스크롤</label>
+      <input id="autoScroll" class="switch" type="checkbox">
+    </div>
+    <div class="field">
+      <label for="resolution">해상도</label>
+      <select id="resolution">
+        <option value="720">720p</option>
+        <option value="1080">1080p</option>
+        <option value="2160">4K (지원 기기)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="orientation">화면 비율</label>
+      <select id="orientation">
+        <option value="auto">자동 (화면 방향)</option>
+        <option value="portrait">세로 9:16</option>
+        <option value="landscape">가로 16:9</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="micToggle">마이크 녹음</label>
+      <input id="micToggle" class="switch" type="checkbox">
+    </div>
+
+    <div class="section-title">단축키</div>
+    <p id="help">
+      <kbd>Space</kbd> 스크롤 재생/정지 · <kbd>↑</kbd><kbd>↓</kbd> 속도 조절 · <kbd>←</kbd><kbd>→</kbd> 앞뒤로 이동<br>
+      <kbd>R</kbd> 녹화 시작/정지 · <kbd>Home</kbd> 처음으로 · <kbd>E</kbd> 대본 편집 · <kbd>+</kbd><kbd>−</kbd> 글자 크기<br>
+      화면을 드래그하면 텍스트 위치를 직접 옮길 수 있고, 탭하면 스크롤이 멈추거나 재개됩니다.
+    </p>
+  </div>
+</div>
+
+<!-- 녹화 결과 -->
+<div class="sheet" id="resultSheet">
+  <div class="sheet-body">
+    <div class="sheet-head">
+      <span></span>
+      <h2>녹화 완료</h2>
+      <button class="text-btn" data-close type="button">닫기</button>
+    </div>
+    <video id="resultVideo" controls playsinline></video>
+    <div class="meta"><span id="resultInfo"></span></div>
+    <div class="row-actions">
+      <a class="btn primary" id="downloadLink" download>저장하기</a>
+      <button class="btn" id="shareBtn" type="button" hidden>공유</button>
+      <button class="btn" id="discardBtn" type="button">삭제</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const STORE_KEY = 'camera-prompter:v1';
+
+  const DEFAULT_SCRIPT =
+`안녕하세요! 카메라 프롬프터에 오신 것을 환영합니다.
+
+왼쪽 아래 ✎ 버튼을 눌러 대본을 입력하세요.
+
+▶ 버튼이나 스페이스바로 스크롤을 시작하고, 가운데 빨간 버튼으로 녹화합니다.
+
+글자는 카메라 렌즈와 가까운 화면 위쪽에 표시되니, 렌즈를 보며 자연스럽게 읽으세요.
+
+녹화된 영상에는 프롬프터 글자가 찍히지 않습니다.`;
+
+  const defaults = {
+    script: DEFAULT_SCRIPT,
+    fontSize: 40,
+    textWidth: 90,
+    areaHeight: 45,
+    overlay: 45,
+    speed: 3,
+    guide: true,
+    mirrorX: false,
+    mirrorY: false,
+    countdown: 3,
+    autoScroll: true,
+    resolution: 1080,
+    orientation: 'auto',
+    mic: true,
+    facing: 'user',
+  };
+
+  // 저장소는 사파리 사생활 보호 모드 등에서 실패할 수 있음
+  function load() {
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem(STORE_KEY) || '{}') }; }
+    catch { return { ...defaults }; }
+  }
+  let saveTimer;
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {}
+    }, 250);
+  }
+  const state = load();
+
+  // ---------- 요소 ----------
+  const video = $('camera');
+  const prompter = $('prompter');
+  const scriptEl = $('script');
+  const root = document.documentElement;
+
+  // ---------- 토스트 ----------
+  let toastTimer;
+  function toast(msg, ms = 1800) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+  }
+
+  // ---------- 화면 반영 ----------
+  function applyStyle() {
+    root.style.setProperty('--font-size', state.fontSize + 'px');
+    root.style.setProperty('--text-width', state.textWidth + '%');
+    root.style.setProperty('--area-height', state.areaHeight + '%');
+    root.style.setProperty('--overlay-alpha', state.overlay / 100);
+    prompter.classList.toggle('no-guide', !state.guide);
+    prompter.classList.toggle('mirror-x', state.mirrorX);
+    prompter.classList.toggle('mirror-y', state.mirrorY);
+    $('speedLabel').textContent = '속도 ' + state.speed.toFixed(1);
+    layoutPadding();
+    clampOffset();
+    render();
+  }
+
+  function setScript(text) {
+    state.script = text;
+    scriptEl.textContent = text || '대본이 비어 있습니다. ✎ 버튼을 눌러 입력하세요.';
+    updateStats();
+    clampOffset();
+    render();
+    save();
+  }
+
+  function updateStats() {
+    const text = state.script.trim();
+    const chars = text.replace(/\s/g, '').length;
+    $('scriptStats').textContent = `${chars.toLocaleString()}자 · ${text ? text.split(/\s+/).length : 0}단어`;
+    // 한국어 발표 기준 대략 분당 300자(공백 제외)
+    const sec = Math.round(chars / 300 * 60);
+    $('scriptEta').textContent = chars ? `예상 낭독 시간 약 ${Math.floor(sec / 60)}분 ${sec % 60}초` : '';
+  }
+
+  // ---------- 스크롤 ----------
+  let offset = 0;          // 스크롤된 px
+  let playing = false;
+  let lastTs = 0;
+
+  // 첫 줄과 마지막 줄이 읽는 위치 표시선(영역 높이의 30%)에 오도록 여백 설정
+  function layoutPadding() {
+    const h = prompter.clientHeight;
+    scriptEl.style.paddingTop = Math.round(h * 0.3) + 'px';
+    scriptEl.style.paddingBottom = Math.round(h * 0.7 - state.fontSize * 1.45) + 'px';
+  }
+  function maxOffset() {
+    return Math.max(0, scriptEl.offsetHeight - prompter.clientHeight);
+  }
+  function clampOffset() {
+    offset = Math.min(Math.max(0, offset), maxOffset());
+  }
+  function render() {
+    scriptEl.style.transform = `translateY(${-offset}px)`;
+    const max = maxOffset();
+    $('progressPill').textContent = (max ? Math.round(offset / max * 100) : 0) + '%';
+  }
+
+  // 속도 1 = 초당 약 글자 크기의 0.25줄 → 글자 크기에 비례해서 체감 속도 일정
+  function pxPerSecond() {
+    return state.speed * state.fontSize * 0.45;
+  }
+
+  function tick(ts) {
+    if (!playing) return;
+    const dt = lastTs ? Math.min(0.1, (ts - lastTs) / 1000) : 0;
+    lastTs = ts;
+    if (!dragging) offset += pxPerSecond() * dt;
+    if (offset >= maxOffset()) {
+      offset = maxOffset();
+      render();
+      setPlaying(false);
+      toast('대본 끝');
+      return;
+    }
+    render();
+    requestAnimationFrame(tick);
+  }
+
+  function setPlaying(on) {
+    if (on && offset >= maxOffset()) offset = 0;
+    playing = on;
+    $('playBtn').textContent = on ? '❚❚' : '▶';
+    $('playBtn').setAttribute('aria-label', on ? '스크롤 정지' : '스크롤 재생');
+    $('playBtn').setAttribute('aria-pressed', String(on));
+    if (on) { lastTs = 0; requestAnimationFrame(tick); }
+    updateWakeLock();
+  }
+
+  function changeSpeed(delta) {
+    state.speed = Math.round(Math.min(15, Math.max(0.5, state.speed + delta)) * 10) / 10;
+    $('speed').value = state.speed;
+    $('speedOut').textContent = state.speed.toFixed(1);
+    applyStyle();
+    save();
+  }
+
+  // 드래그로 직접 이동, 짧은 탭은 재생/정지
+  let dragging = false, dragStartY = 0, dragStartOffset = 0, moved = false;
+  prompter.addEventListener('pointerdown', (e) => {
+    dragging = true; moved = false;
+    dragStartY = e.clientY; dragStartOffset = offset;
+    prompter.setPointerCapture(e.pointerId);
+  });
+  prompter.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    let dy = e.clientY - dragStartY;
+    if (state.mirrorY) dy = -dy;
+    if (Math.abs(dy) > 6) moved = true;
+    offset = dragStartOffset - dy;
+    clampOffset(); render();
+  });
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    if (!moved) setPlaying(!playing);
+    lastTs = 0;
+  };
+  prompter.addEventListener('pointerup', endDrag);
+  prompter.addEventListener('pointercancel', endDrag);
+  prompter.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    offset += state.mirrorY ? -e.deltaY : e.deltaY;
+    clampOffset(); render();
+  }, { passive: false });
+
+  // ---------- 카메라 ----------
+  let stream = null;
+
+  function videoConstraints() {
+    const h = Number(state.resolution);
+    const w = Math.round(h * 16 / 9);
+    let portrait;
+    if (state.orientation === 'auto') portrait = window.innerHeight > window.innerWidth;
+    else portrait = state.orientation === 'portrait';
+    return {
+      facingMode: state.facing,
+      width: { ideal: portrait ? h : w },
+      height: { ideal: portrait ? w : h },
+      frameRate: { ideal: 30 },
+    };
+  }
+
+  async function startCamera() {
+    if (recorder && recorder.state === 'recording') return;
+    stopCamera();
+    $('noCamera').hidden = true;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showNoCamera('이 브라우저는 카메라를 지원하지 않습니다. HTTPS 주소(또는 localhost)로 열었는지 확인하세요.');
+      return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints(),
+        audio: state.mic ? { echoCancellation: true, noiseSuppression: true } : false,
+      });
+    } catch (err) {
+      // 마이크가 없거나 거부된 경우 영상만이라도 시도
+      if (state.mic) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(), audio: false });
+          toast('마이크를 사용할 수 없어 영상만 녹화합니다.', 2600);
+        } catch (err2) { err = err2; }
+      }
+      if (!stream) {
+        const msg = err && err.name === 'NotAllowedError'
+          ? '카메라 권한이 거부되었습니다. 브라우저 주소창의 권한 설정에서 허용해 주세요.'
+          : '카메라를 시작할 수 없습니다. (' + (err && err.name || '알 수 없는 오류') + ')';
+        showNoCamera(msg);
+        return;
+      }
+    }
+    video.srcObject = stream;
+    const track = stream.getVideoTracks()[0];
+    const facing = track?.getSettings?.().facingMode;
+    // 셀카는 거울처럼 보이게 (녹화 파일은 반전되지 않음)
+    video.classList.toggle('selfie', facing ? facing === 'user' : state.facing === 'user');
+    $('recBtn').disabled = false;
+  }
+
+  function stopCamera() {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+    video.srcObject = null;
+  }
+
+  function showNoCamera(msg) {
+    $('noCameraMsg').textContent = msg;
+    $('noCamera').hidden = false;
+    $('recBtn').disabled = true;
+  }
+
+  async function flipCamera() {
+    if (recorder && recorder.state === 'recording') { toast('녹화 중에는 전환할 수 없습니다.'); return; }
+    state.facing = state.facing === 'user' ? 'environment' : 'user';
+    save();
+    await startCamera();
+  }
+
+  // ---------- 녹화 ----------
+  let recorder = null, chunks = [], recStart = 0, recTimer = null, resultUrl = null, resultBlob = null;
+  let countingDown = false;
+
+  function pickMime() {
+    if (!window.MediaRecorder) return null;
+    const list = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return list.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+  }
+
+  function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  async function runCountdown(n) {
+    const el = $('countdown');
+    countingDown = true;
+    el.classList.add('on');
+    for (let i = n; i > 0 && countingDown; i--) {
+      el.textContent = i;
+      await sleep(1000);
+    }
+    el.classList.remove('on');
+    const ok = countingDown;
+    countingDown = false;
+    return ok;
+  }
+
+  async function toggleRecording() {
+    if (countingDown) { countingDown = false; return; } // 카운트다운 취소
+    if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+    if (!stream) { await startCamera(); if (!stream) return; }
+    const mime = pickMime();
+    if (mime === null) { toast('이 브라우저는 녹화를 지원하지 않습니다.', 2600); return; }
+
+    setPlaying(false);
+    if (state.countdown > 0 && !(await runCountdown(state.countdown))) return;
+
+    chunks = [];
+    try {
+      recorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 8_000_000 } : undefined);
+    } catch {
+      recorder = new MediaRecorder(stream);
+    }
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = onRecordingStop;
+    recorder.start(1000);
+    recStart = Date.now();
+    $('recBtn').classList.add('on');
+    $('recBtn').setAttribute('aria-label', '녹화 정지');
+    $('recPill').classList.add('on');
+    updateRecTime();
+    recTimer = setInterval(updateRecTime, 500);
+    if (state.autoScroll) setPlaying(true);
+    updateWakeLock();
+  }
+
+  function updateRecTime() {
+    const s = Math.floor((Date.now() - recStart) / 1000);
+    $('recTime').textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function onRecordingStop() {
+    clearInterval(recTimer);
+    $('recBtn').classList.remove('on');
+    $('recBtn').setAttribute('aria-label', '녹화 시작');
+    $('recPill').classList.remove('on');
+    setPlaying(false);
+    const type = recorder.mimeType || chunks[0]?.type || 'video/webm';
+    const blob = new Blob(chunks, { type });
+    chunks = [];
+    if (!blob.size) { toast('녹화된 데이터가 없습니다.'); return; }
+
+    if (resultUrl) URL.revokeObjectURL(resultUrl);
+    resultBlob = blob;
+    resultUrl = URL.createObjectURL(blob);
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    const name = `prompter-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+
+    $('resultVideo').src = resultUrl;
+    $('downloadLink').href = resultUrl;
+    $('downloadLink').download = name;
+    $('resultInfo').textContent = `${name} · ${(blob.size / 1024 / 1024).toFixed(1)} MB · ${$('recTime').textContent}`;
+    const file = new File([blob], name, { type });
+    $('shareBtn').hidden = !(navigator.canShare && navigator.canShare({ files: [file] }));
+    $('shareBtn').onclick = () => navigator.share({ files: [file], title: name }).catch(() => {});
+    openSheet('resultSheet');
+    updateWakeLock();
+  }
+
+  $('discardBtn').addEventListener('click', () => {
+    if (!confirm('이 녹화본을 삭제할까요?')) return;
+    $('resultVideo').removeAttribute('src');
+    $('resultVideo').load();
+    if (resultUrl) URL.revokeObjectURL(resultUrl);
+    resultUrl = null; resultBlob = null;
+    closeSheets();
+  });
+
+  // ---------- 화면 꺼짐 방지 ----------
+  let wakeLock = null;
+  async function updateWakeLock() {
+    const need = playing || (recorder && recorder.state === 'recording');
+    try {
+      if (need && !wakeLock && 'wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } else if (!need && wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+      }
+    } catch {}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') updateWakeLock();
+  });
+
+  // ---------- 시트 ----------
+  function openSheet(id) {
+    closeSheets();
+    setPlaying(false);
+    $(id).classList.add('open');
+  }
+  function closeSheets() {
+    document.querySelectorAll('.sheet.open').forEach((s) => s.classList.remove('open'));
+  }
+  document.querySelectorAll('.sheet').forEach((sheet) => {
+    sheet.addEventListener('click', (e) => { if (e.target === sheet) closeSheets(); });
+    sheet.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeSheets));
+  });
+  const isSheetOpen = () => !!document.querySelector('.sheet.open');
+
+  // ---------- 대본 편집 ----------
+  const input = $('scriptInput');
+  $('editBtn').addEventListener('click', () => {
+    if (recorder && recorder.state === 'recording') { toast('녹화 중에는 편집할 수 없습니다.'); return; }
+    input.value = state.script;
+    updateStats();
+    openSheet('editSheet');
+    setTimeout(() => input.focus(), 50);
+  });
+  input.addEventListener('input', () => { setScript(input.value); });
+  $('clearScript').addEventListener('click', () => {
+    if (input.value && !confirm('대본을 모두 지울까요?')) return;
+    input.value = ''; setScript(''); offset = 0; render(); input.focus();
+  });
+  $('fileInput').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    input.value = await f.text();
+    setScript(input.value);
+    offset = 0; render();
+    e.target.value = '';
+  });
+  $('pasteBtn').addEventListener('click', async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) { toast('클립보드가 비어 있습니다.'); return; }
+      input.value = text; setScript(text); offset = 0; render();
+    } catch {
+      toast('클립보드에 접근할 수 없습니다. 직접 붙여넣어 주세요.', 2400);
+    }
+  });
+
+  // ---------- 설정 ----------
+  function bindRange(id, key, fmt) {
+    const el = $(id), out = $(id + 'Out');
+    el.value = state[key];
+    out.textContent = fmt(state[key]);
+    el.addEventListener('input', () => {
+      state[key] = Number(el.value);
+      out.textContent = fmt(state[key]);
+      applyStyle(); save();
+    });
+  }
+  bindRange('fontSize', 'fontSize', (v) => v + 'px');
+  bindRange('textWidth', 'textWidth', (v) => v + '%');
+  bindRange('areaHeight', 'areaHeight', (v) => v + '%');
+  bindRange('overlay', 'overlay', (v) => v + '%');
+  bindRange('speed', 'speed', (v) => v.toFixed(1));
+
+  function bindCheck(id, key, after) {
+    const el = $(id);
+    el.checked = !!state[key];
+    el.addEventListener('change', () => { state[key] = el.checked; applyStyle(); save(); after && after(); });
+  }
+  bindCheck('guideToggle', 'guide');
+  bindCheck('mirrorX', 'mirrorX');
+  bindCheck('mirrorY', 'mirrorY');
+  bindCheck('autoScroll', 'autoScroll');
+  bindCheck('micToggle', 'mic', startCamera);
+
+  function bindSelect(id, key, parse, after) {
+    const el = $(id);
+    el.value = String(state[key]);
+    el.addEventListener('change', () => { state[key] = parse(el.value); save(); after && after(); });
+  }
+  bindSelect('countdownSel', 'countdown', Number);
+  bindSelect('resolution', 'resolution', Number, startCamera);
+  bindSelect('orientation', 'orientation', String, startCamera);
+
+  // ---------- 버튼 ----------
+  $('settingsBtn').addEventListener('click', () => openSheet('settingsSheet'));
+  $('playBtn').addEventListener('click', () => setPlaying(!playing));
+  $('recBtn').addEventListener('click', toggleRecording);
+  $('flipBtn').addEventListener('click', flipCamera);
+  $('retryCamera').addEventListener('click', startCamera);
+  $('slower').addEventListener('click', () => changeSpeed(-0.5));
+  $('faster').addEventListener('click', () => changeSpeed(0.5));
+
+  // ---------- 키보드 ----------
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { if (countingDown) countingDown = false; closeSheets(); return; }
+    if (isSheetOpen() || e.target.matches('input, textarea, select')) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const step = state.fontSize * 1.45 * 2; // 두 줄
+    switch (e.key) {
+      case ' ': e.preventDefault(); setPlaying(!playing); break;
+      case 'ArrowUp': e.preventDefault(); changeSpeed(0.5); break;
+      case 'ArrowDown': e.preventDefault(); changeSpeed(-0.5); break;
+      case 'ArrowLeft': case 'PageUp': e.preventDefault(); offset -= step; clampOffset(); render(); break;
+      case 'ArrowRight': case 'PageDown': e.preventDefault(); offset += step; clampOffset(); render(); break;
+      case 'Home': offset = 0; render(); break;
+      case 'End': offset = maxOffset(); render(); break;
+      case 'r': case 'R': toggleRecording(); break;
+      case 'e': case 'E': e.preventDefault(); $('editBtn').click(); break;
+      case 'f': case 'F': flipCamera(); break;
+      case 'm': case 'M': state.mirrorX = !state.mirrorX; $('mirrorX').checked = state.mirrorX; applyStyle(); save(); break;
+      case '+': case '=': state.fontSize = Math.min(120, state.fontSize + 2); $('fontSize').value = state.fontSize; $('fontSizeOut').textContent = state.fontSize + 'px'; applyStyle(); save(); break;
+      case '-': case '_': state.fontSize = Math.max(18, state.fontSize - 2); $('fontSize').value = state.fontSize; $('fontSizeOut').textContent = state.fontSize + 'px'; applyStyle(); save(); break;
+    }
+  });
+
+  // ---------- 화면 회전 ----------
+  let lastPortrait = window.innerHeight > window.innerWidth;
+  window.addEventListener('resize', () => {
+    layoutPadding(); clampOffset(); render();
+    const portrait = window.innerHeight > window.innerWidth;
+    if (portrait !== lastPortrait) {
+      lastPortrait = portrait;
+      if (state.orientation === 'auto' && !(recorder && recorder.state === 'recording')) startCamera();
+    }
+  });
+
+  // ---------- 시작 ----------
+  setScript(state.script);
+  applyStyle();
+  startCamera();
+})();
+</script>
+</body>
+</html>
