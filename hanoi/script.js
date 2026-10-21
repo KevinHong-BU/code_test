@@ -1,6 +1,8 @@
 (() => {
-  const MOVE_INTERVAL = 1000; // 원반 하나를 옮기는 주기 (ms)
-  const ANIM_DURATION = 750;  // 실제 애니메이션 시간 (주기보다 짧게)
+  const TIME_STEP = 0.2;      // 이동 시간 설정 단위 (초)
+  const MIN_TIME = 0.2;
+  const MAX_TIME = 5;
+  const ANIM_RATIO = 0.75;    // 이동 시간 중 애니메이션이 차지하는 비율
   const MIN_DISKS = 1;
   const MAX_DISKS = 10;
   const BASE_TOP_OFFSET = 24; // 보드 아래쪽에서 받침대 윗면까지 거리(px)
@@ -10,6 +12,7 @@
   const startBtn = document.getElementById('startBtn');
   const pauseBtn = document.getElementById('pauseBtn');
   const resetBtn = document.getElementById('resetBtn');
+  const timeInput = document.getElementById('moveTime');
   const moveCountEl = document.getElementById('moveCount');
   const totalMovesEl = document.getElementById('totalMoves');
   const moveInfoEl = document.getElementById('moveInfo');
@@ -26,6 +29,20 @@
   let paused = false;
   let animating = false;
   let geom = null;
+  let animDuration = 750;
+
+  // 이동 시간을 0.2초 단위로 맞추고 범위 안으로 제한
+  function clampTime(value) {
+    let v = parseFloat(value);
+    if (Number.isNaN(v)) v = 1;
+    v = Math.round(v / TIME_STEP + 1e-9) * TIME_STEP;
+    v = Math.min(MAX_TIME, Math.max(MIN_TIME, v));
+    return Math.round(v * 10) / 10;
+  }
+
+  function moveInterval() {
+    return clampTime(timeInput.value) * 1000;
+  }
 
   function clampCount(value) {
     const v = parseInt(value, 10);
@@ -157,8 +174,9 @@
     ];
 
     animating = true;
+    animDuration = moveInterval() * ANIM_RATIO;
     el.classList.add('moving');
-    const anim = el.animate(frames, { duration: ANIM_DURATION, easing: 'ease-in-out' });
+    const anim = el.animate(frames, { duration: animDuration, easing: 'ease-in-out' });
     anim.onfinish = () => {
       el.style.left = end.left + 'px';
       el.style.bottom = end.bottom + 'px';
@@ -184,9 +202,9 @@
         finish();
       }
     });
-    // 애니메이션과 별개로 1초마다 다음 이동 예약
+    // 설정한 이동 시간마다 다음 이동 예약 (실행 중 변경도 다음 이동부터 반영)
     if (step + 1 < moves.length) {
-      timer = setTimeout(nextMove, MOVE_INTERVAL);
+      timer = setTimeout(nextMove, moveInterval());
     }
   }
 
@@ -231,7 +249,7 @@
       timer = null;
     } else {
       // 진행 중인 애니메이션이 끝날 시간을 기다린 뒤 재개
-      timer = setTimeout(nextMove, animating ? ANIM_DURATION : 0);
+      timer = setTimeout(nextMove, animating ? animDuration : 0);
     }
     updateButtons();
   });
@@ -240,6 +258,10 @@
 
   diskInput.addEventListener('change', () => {
     if (!running) build();
+  });
+
+  timeInput.addEventListener('change', () => {
+    timeInput.value = clampTime(timeInput.value).toFixed(1);
   });
 
   window.addEventListener('resize', () => {
