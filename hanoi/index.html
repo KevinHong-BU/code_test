@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>하노이 탑 시뮬레이터</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="container">
+    <h1>하노이 탑 시뮬레이터</h1>
+
+    <section class="controls">
+      <label for="diskCount">원반 개수
+        <input type="number" id="diskCount" min="1" max="15" value="4">
+      </label>
+      <label for="moveTime">이동 시간(초)
+        <input type="number" id="moveTime" min="0.1" max="5" step="0.1" value="1.0">
+      </label>
+      <button id="startBtn" class="primary">시작</button>
+      <button id="pauseBtn" disabled>일시정지</button>
+      <button id="resetBtn">초기화</button>
+    </section>
+
+    <section class="status">
+      <span>이동 횟수: <strong id="moveCount">0</strong> / <strong id="totalMoves">15</strong></span>
+      <span id="moveInfo">원반 개수를 정하고 시작 버튼을 누르세요.</span>
+    </section>
+
+    <section id="board" class="board">
+      <div class="base"></div>
+    </section>
+    <div class="labels"><span>A</span><span>B</span><span>C</span></div>
+  </main>
+  <script src="script.js"></script>
+</body>
+</html>
