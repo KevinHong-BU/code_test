@@ -70,6 +70,24 @@ foreach (var qs in queries) {
     Check(gs.SetEquals(exp), $"mismatch '{qs}' mc={mc} tk={tk}: got {got.Length} exp {exp.Count}");
 }
 
+// drive filter: only selected drives are searched
+{
+    var q = Query.Parse("report", TargetKind.All, false);
+    var both = engine.Search(q, new SortSpec(SortColumn.Name, false), CancellationToken.None).Items;
+    var onlyC = engine.Search(q, new SortSpec(SortColumn.Name, false), CancellationToken.None, new[] { true, false }).Items;
+    var onlyD = engine.Search(q, new SortSpec(SortColumn.Name, false), CancellationToken.None, new[] { false, true }).Items;
+    var none = engine.Search(q, new SortSpec(SortColumn.Name, false), CancellationToken.None, new bool[0]).Items;
+    Check(onlyC.All(k => SearchResult.Volume(k) == 0) && onlyC.Length > 0, "filter C only");
+    Check(onlyD.All(k => SearchResult.Volume(k) == 1) && onlyD.Length > 0, "filter D only");
+    Check(onlyC.Length + onlyD.Length == both.Length, "filter sums");
+    Check(none.Length == 0, "filter none");
+    var ex = Brute(engine, q).Where(k => SearchResult.Volume(k) == 1).ToHashSet();
+    Check(ex.SetEquals(onlyD), "filter D brute");
+    // 검색어로 드라이브 거르기 (d:\ report)
+    var dPath = engine.Search(Query.Parse("d:\\ report", TargetKind.All, false), new SortSpec(SortColumn.Name, false), CancellationToken.None).Items;
+    Check(dPath.ToHashSet().SetEquals(onlyD), "d:\\ path filter");
+}
+
 // literal semantics vs naive
 foreach (var (qs, mc) in new[] { ("report", false), ("Report", true), ("img 20", false), ("사진 final", false) }) {
     var terms = qs.Split(' ');

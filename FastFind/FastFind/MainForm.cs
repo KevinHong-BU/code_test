@@ -13,18 +13,23 @@ internal sealed class MainForm : Form
         "  *.pdf   a?c\t와일드카드 (* = 아무 글자들, ? = 한 글자)\n" +
         "  ext:jpg;png\t확장자\n" +
         "  users\\kim\t\\ 를 넣으면 폴더 경로까지 포함해서 찾음\n" +
+        "  d:\\ 보고서\t특정 드라이브에서만 찾기 (드라이브 버튼으로도 선택)\n" +
         "  regex:^IMG_\\d+\t정규식\n\n" +
         "단축키\n\n" +
         "  Enter\t\t열기\n" +
         "  Ctrl+Enter\t파일 위치 열기\n" +
         "  Ctrl+C\t\t전체 경로 복사\n" +
         "  ↓ / Esc\t결과 목록 ↔ 검색창 이동, Esc 두 번 = 검색어 지우기\n" +
+        "  Ctrl+D\t\t검색할 드라이브 선택\n" +
         "  F5\t\t전체 다시 색인\n\n" +
         "결과를 끌어서 탐색기나 다른 프로그램에 놓을 수 있습니다.";
 
     private readonly IndexManager _manager = new();
     private readonly TextBox _search;
     private readonly ComboBox _target;
+    private readonly Button _driveButton;
+    private readonly ContextMenuStrip _driveMenu;
+    private readonly System.Windows.Forms.Timer _deviceTimer;
     private readonly CheckBox _matchCase;
     private readonly ResultListView _list;
     private readonly ToolStripStatusLabel _resultLabel;
@@ -61,11 +66,12 @@ internal sealed class MainForm : Form
         {
             Dock = DockStyle.Top,
             AutoSize = true,
-            ColumnCount = 4,
+            ColumnCount = 5,
             RowCount = 1,
             Padding = new Padding(6, 6, 6, 4),
         };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -80,6 +86,22 @@ internal sealed class MainForm : Form
         _search.TextChanged += (_, _) => RunSearch(keepSelection: false);
         _search.KeyDown += Search_KeyDown;
 
+        // 검색할 드라이브 선택: 버튼을 누르면 체크 목록이 열림 (여러 개 고를 수 있음)
+        _driveButton = new Button
+        {
+            Text = "드라이브: 전체 ▾",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 2, 6, 0),
+        };
+        _driveMenu = new ContextMenuStrip { ShowCheckMargin = true, ShowImageMargin = false };
+        // 항목을 눌러도 메뉴가 닫히지 않게 해서 여러 드라이브를 연달아 고를 수 있게 합니다
+        _driveMenu.Closing += (_, e) =>
+        {
+            if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked) e.Cancel = true;
+        };
+        _driveButton.Click += (_, _) => ShowDriveMenu();
+
         _target = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90, Anchor = AnchorStyles.Left, Margin = new Padding(0, 3, 6, 0) };
         _target.Items.AddRange(new object[] { "전체", "파일만", "폴더만" });
         _target.SelectedIndex = 0;
@@ -92,9 +114,10 @@ internal sealed class MainForm : Form
         help.Click += (_, _) => MessageBox.Show(this, HelpText, "빠른 파일 찾기", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
         top.Controls.Add(_search, 0, 0);
-        top.Controls.Add(_target, 1, 0);
-        top.Controls.Add(_matchCase, 2, 0);
-        top.Controls.Add(help, 3, 0);
+        top.Controls.Add(_driveButton, 1, 0);
+        top.Controls.Add(_target, 2, 0);
+        top.Controls.Add(_matchCase, 3, 0);
+        top.Controls.Add(help, 4, 0);
 
         // ── 결과 목록 (가상 모드: 화면에 보이는 줄만 만들어서 수백만 개도 즉시 표시) ──
         _icons = new ShellIcons(SystemInformation.SmallIconSize);
@@ -151,14 +174,27 @@ internal sealed class MainForm : Form
             _pendingSearch = true;
             if (!_refreshTimer.Enabled) _refreshTimer.Start();
         });
-        _manager.StatusChanged += () => BeginInvokeSafe(() => _indexLabel.Text = _manager.GetStatusText());
+        _manager.StatusChanged += () => BeginInvokeSafe(() =>
+        {
+            _indexLabel.Text = _manager.GetStatusText();
+            UpdateDriveButton();
+        });
+
+        // USB 연결/해제 알림이 연달아 오므로 잠깐 모았다가 드라이브 목록을 다시 확인
+        _deviceTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+        _deviceTimer.Tick += (_, _) =>
+        {
+            _deviceTimer.Stop();
+            Task.Run(_manager.RefreshDrives);
+        };
     }
 
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
         _search.Focus();
-        _manager.Start();
+        // 드라이브 확인(IsReady)이 느린 경우가 있어 화면을 먼저 띄운 뒤 백그라운드에서 시작
+        Task.Run(_manager.Start);
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
@@ -187,10 +223,11 @@ internal sealed class MainForm : Form
         var query = Query.Parse(_search.Text, target, _matchCase.Checked);
         var sort = _sort;
         var engine = _manager.Engine;
+        var include = _manager.GetSearchFilter();
 
         Task.Run(() =>
         {
-            try { return engine.Search(query, sort, cts.Token); }
+            try { return engine.Search(query, sort, cts.Token, include); }
             catch (Exception) when (cts.IsCancellationRequested) { return null; }
             catch (Exception ex)
             {
@@ -326,12 +363,95 @@ internal sealed class MainForm : Form
         }
     }
 
+    // ───────────────────────── 드라이브 선택 ─────────────────────────
+
+    private void ShowDriveMenu()
+    {
+        BuildDriveMenu();
+        _driveMenu.Show(_driveButton, new Point(0, _driveButton.Height));
+    }
+
+    private void BuildDriveMenu()
+    {
+        var drives = _manager.GetDrives();
+        _driveMenu.SuspendLayout();
+        _driveMenu.Items.Clear();
+        if (drives.Count == 0)
+            _driveMenu.Items.Add(new ToolStripMenuItem("연결된 드라이브가 없습니다") { Enabled = false });
+
+        foreach (var d in drives)
+        {
+            string kind = d.Type == DriveType.Removable ? "  [이동식]" : "";
+            string state = d.Selected ? $"  — {d.State}" : "";
+            var item = new ToolStripMenuItem($"{d.Root.TrimEnd('\\')}   {d.Label}{kind}{state}")
+            {
+                Checked = d.Selected,
+                CheckOnClick = true,
+                Tag = d.Root,
+            };
+            item.CheckedChanged += (_, _) =>
+            {
+                _manager.SetSelected((string)item.Tag!, item.Checked);
+                UpdateDriveButton();
+                RunSearch(keepSelection: false);
+            };
+            _driveMenu.Items.Add(item);
+        }
+
+        _driveMenu.Items.Add(new ToolStripSeparator());
+        _driveMenu.Items.Add(new ToolStripMenuItem("모두 선택", null, (_, _) => SelectDrives(drives, d => true)));
+        _driveMenu.Items.Add(new ToolStripMenuItem("고정 디스크만", null,
+            (_, _) => SelectDrives(drives, d => d.Type == DriveType.Fixed)));
+        _driveMenu.Items.Add(new ToolStripMenuItem("드라이브 목록 새로 고침", null, (_, _) =>
+        {
+            _manager.RefreshDrives();
+            BuildDriveMenu();
+        }));
+        _driveMenu.ResumeLayout();
+    }
+
+    private void SelectDrives(IReadOnlyList<IndexManager.DriveItem> drives, Func<IndexManager.DriveItem, bool> pick)
+    {
+        _manager.SetSelected(drives.Where(pick).Select(d => d.Root), true);
+        _manager.SetSelected(drives.Where(d => !pick(d)).Select(d => d.Root), false);
+        BuildDriveMenu();   // 체크 표시 다시 그리기
+        UpdateDriveButton();
+        RunSearch(keepSelection: false);
+    }
+
+    private void UpdateDriveButton()
+    {
+        var drives = _manager.GetDrives();
+        var selected = drives.Where(d => d.Selected).Select(d => d.Root.TrimEnd('\\')).ToList();
+        _driveButton.Text = "드라이브: " + (selected.Count == 0 ? "없음"
+            : selected.Count == drives.Count ? "전체"
+            : string.Join(" ", selected)) + " ▾";
+    }
+
+    /// <summary>USB를 꽂거나 빼면 Windows가 보내는 알림.</summary>
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_DEVICECHANGE = 0x0219;
+        const int DBT_DEVICEARRIVAL = 0x8000;
+        const int DBT_DEVICEREMOVECOMPLETE = 0x8004;
+        if (m.Msg == WM_DEVICECHANGE &&
+            (m.WParam == (IntPtr)DBT_DEVICEARRIVAL || m.WParam == (IntPtr)DBT_DEVICEREMOVECOMPLETE))
+        {
+            _deviceTimer?.Stop();
+            _deviceTimer?.Start();
+        }
+        base.WndProc(ref m);
+    }
+
     // ───────────────────────── 키보드 / 동작 ─────────────────────────
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         switch (keyData)
         {
+            case Keys.Control | Keys.D:
+                ShowDriveMenu();
+                return true;
             case Keys.F5:
                 _manager.RebuildAll();
                 return true;

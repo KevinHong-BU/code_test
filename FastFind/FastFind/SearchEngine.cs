@@ -73,10 +73,12 @@ internal sealed class SearchEngine
 
     // ───────────────────────── 검색 ─────────────────────────
 
-    public SearchResult Search(Query q, SortSpec sort, CancellationToken ct)
+    /// <param name="include">드라이브 번호별 검색 여부. null이면 모든 드라이브.</param>
+    public SearchResult Search(Query q, SortSpec sort, CancellationToken ct, bool[]? include = null)
     {
         var sw = Stopwatch.StartNew();
         var vols = _volumes;
+        bool Included(int vi) => include == null || (vi < include.Length && include[vi]);
         var held = new List<VolumeIndex>(vols.Length);
         long[] items;
         string? note = null;
@@ -84,9 +86,10 @@ internal sealed class SearchEngine
         var col = sort.Column;
         try
         {
-            foreach (var v in vols)
+            for (int vi = 0; vi < vols.Length; vi++)
             {
-                if (v == null) continue;
+                var v = vols[vi];
+                if (v == null || !Included(vi)) continue;
                 v.Lock.EnterReadLock();
                 held.Add(v);
             }
@@ -97,7 +100,7 @@ internal sealed class SearchEngine
                 Parallel.For(0, vols.Length, new ParallelOptions { CancellationToken = ct }, vi =>
                 {
                     var v = vols[vi];
-                    parts[vi] = v == null ? Array.Empty<HitBuffer>() : SearchVolume(v, vi, q, ct);
+                    parts[vi] = v == null || !Included(vi) ? Array.Empty<HitBuffer>() : SearchVolume(v, vi, q, ct);
                 });
                 ct.ThrowIfCancellationRequested();
 
