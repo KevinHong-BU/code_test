@@ -35,21 +35,32 @@ C# WinForms(.NET 8)로 만들었고, Visual Studio Community에서 바로 열어
 
 1. Visual Studio Community 2022(17.8 이상)를 설치할 때 **".NET 데스크톱 개발"** 워크로드를 선택합니다.
    (이미 설치했다면 `Visual Studio Installer > 수정`에서 추가)
-2. `ScreenPen.sln`을 엽니다.
+2. 저장소를 내 사용자 폴더 아래에 받고 `ScreenPen\ScreenPen.sln`을 엽니다.
+   ```
+   cd %USERPROFILE%\source\repos
+   git clone https://github.com/KevinHong-BU/code_test.git
+   start code_test\ScreenPen\ScreenPen.sln
+   ```
+   > 관리자 권한 명령 프롬프트는 시작 위치가 `C:\Windows\System32`라서, 그대로 클론하면
+   > 빌드할 때 "액세스가 거부되었습니다" 오류가 납니다. 일반 명령 프롬프트를 쓰거나 위처럼 먼저 `cd` 하세요.
 3. `F5`(디버그 실행) 또는 `Ctrl+F5`(디버그 없이 실행)를 누릅니다.
 
-실행 파일은 `ScreenPen\bin\Debug\net8.0-windows\ScreenPen.exe`에 만들어집니다.
+실행 파일은 `code_test\ScreenPen\ScreenPen\bin\Debug\net8.0-windows\ScreenPen.exe`에 만들어집니다.
 
 ### 다른 PC에 배포할 단일 exe 만들기
 
 솔루션 탐색기에서 프로젝트 우클릭 → **게시(Publish)** → 폴더 → 배포 모드 "자체 포함", 파일 게시 옵션 "단일 파일 생성"을 선택합니다.
-또는 명령줄에서:
+또는 명령줄에서 (**클론한 `code_test` 폴더 안에서** 실행):
 
 ```
-dotnet publish ScreenPen\ScreenPen.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+cd code_test
+dotnet publish ScreenPen\ScreenPen\ScreenPen.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-`ScreenPen\bin\Release\net8.0-windows\win-x64\publish\ScreenPen.exe` 하나만 복사하면 .NET이 없는 PC에서도 실행됩니다.
+> `MSB1009: 프로젝트 파일이 없습니다` 오류가 나면 현재 폴더가 `code_test`인지 확인하세요.
+> (`dir` 명령을 쳤을 때 `ScreenPen` 폴더와 `README.md`가 보여야 합니다.)
+
+만들어진 `code_test\ScreenPen\ScreenPen\bin\Release\net8.0-windows\win-x64\publish\ScreenPen.exe` 하나만 복사하면 .NET이 없는 PC에서도 실행됩니다.
 
 ### 실행 옵션
 
