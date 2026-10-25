@@ -63,3 +63,4 @@ app/src/main/java/com/kevinhong/schedule/
 ## 다른 프로젝트
 
 - [`ScreenPen/`](ScreenPen/README.md) — Windows 화면 판서 프로그램 (C# WinForms, Visual Studio Community)
+- [`FastFind/`](FastFind/README.md) — Windows 드라이브 초고속 파일 찾기 (NTFS MFT 직접 읽기 + SIMD 검색, C# WinForms)
