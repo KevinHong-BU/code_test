@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    검색 엔진 핵심(색인 구조, 검색어 해석, 검색·정렬)을 확인하는 테스트.
+    Windows API를 쓰지 않는 부분만 묶었으므로 Windows/Linux/macOS 어디서나 실행됩니다.
+    실행 방법은 README.md의 "테스트" 항목을 보세요.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>CA1416</NoWarn>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\FastFind\VolumeIndex.cs" Link="Core\VolumeIndex.cs" />
+    <Compile Include="..\FastFind\Query.cs" Link="Core\Query.cs" />
+    <Compile Include="..\FastFind\SearchEngine.cs" Link="Core\SearchEngine.cs" />
+    <Compile Include="..\FastFind\NativeMethods.cs" Link="Core\NativeMethods.cs" />
+  </ItemGroup>
+
+</Project>
