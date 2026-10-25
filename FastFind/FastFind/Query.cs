@@ -28,6 +28,9 @@ internal sealed class Query
 
     public bool IsEmpty => Conditions.Count == 0;
 
+    /// <summary>폴더 범위를 맨 앞 조건으로 넣습니다 (가장 싸고 많이 걸러 냄).</summary>
+    public void AddScope(ScopeCondition scope) => Conditions.Insert(0, scope);
+
     public static Query Parse(string text, TargetKind target, bool matchCase)
     {
         var q = new Query { Target = target, MatchCase = matchCase };
@@ -282,6 +285,76 @@ internal sealed class PathCondition : Condition
         int len = v.WriteFullPath(idx, buf, !_matchCase);
         if (len < 0) return false;
         return WildMatch(buf.AsSpan(0, len), _text);
+    }
+}
+
+/// <summary>
+/// 폴더 범위: 지정한 폴더 바로 안(childrenOnly) 또는 그 아래 전체에 있는 항목만.
+/// 아래 전체를 볼 때는 부모를 따라 올라가며 확인하되, 폴더별 결과를 검색 한 번 동안 기억해 둡니다.
+/// </summary>
+internal sealed class ScopeCondition : Condition
+{
+    private const byte Inside = 1, Outside = 2;
+
+    private readonly VolumeIndex _vol;
+    private readonly int _dir;            // -1 = 드라이브 루트
+    private readonly bool _childrenOnly;
+    private byte[]? _states;
+
+    public ScopeCondition(VolumeIndex vol, int dir, bool childrenOnly)
+    {
+        _vol = vol;
+        _dir = dir;
+        _childrenOnly = childrenOnly;
+    }
+
+    public override int Cost => 0;
+
+    public override bool IsMatch(VolumeIndex v, int idx)
+    {
+        if (!ReferenceEquals(v, _vol)) return false;
+        int parent = v.Entries[idx].Parent;
+        if (_childrenOnly) return parent == _dir;
+        if (_dir < 0) return true;         // 드라이브 전체
+        return IsInside(v, parent);
+    }
+
+    private bool IsInside(VolumeIndex v, int dir)
+    {
+        var states = _states;
+        if (states == null)
+        {
+            Interlocked.CompareExchange(ref _states, new byte[v.Count], null);
+            states = _states!;
+        }
+
+        // 위로 올라가며 답을 아는 폴더를 만날 때까지 확인
+        Span<int> path = stackalloc int[256];
+        int n = 0;
+        int cur = dir;
+        byte result;
+        while (true)
+        {
+            if (cur == _dir) { result = Inside; break; }
+            if (cur < 0) { result = Outside; break; }
+            if (cur < states.Length && states[cur] != 0) { result = states[cur]; break; }
+            if (n == path.Length) { result = IsInsideSlow(v, cur) ? Inside : Outside; break; }
+            path[n++] = cur;
+            cur = v.Entries[cur].Parent;
+        }
+        for (int i = 0; i < n; i++)
+            if (path[i] < states.Length) states[path[i]] = result; // 여러 스레드가 같은 값을 써도 무해
+        return result == Inside;
+    }
+
+    private bool IsInsideSlow(VolumeIndex v, int cur)
+    {
+        for (int depth = 0; cur >= 0 && depth < 4096; depth++)
+        {
+            if (cur == _dir) return true;
+            cur = v.Entries[cur].Parent;
+        }
+        return false;
     }
 }
 

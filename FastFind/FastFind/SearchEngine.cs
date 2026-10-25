@@ -5,7 +5,8 @@ namespace FastFind;
 
 internal enum SortColumn { Name, Path, Size, Modified, Extension }
 
-internal readonly record struct SortSpec(SortColumn Column, bool Descending);
+/// <param name="FoldersFirst">폴더 내용을 볼 때처럼 폴더를 파일보다 앞에 둠</param>
+internal readonly record struct SortSpec(SortColumn Column, bool Descending, bool FoldersFirst = false);
 
 internal sealed class SearchResult
 {
@@ -153,6 +154,7 @@ internal sealed class SearchEngine
 
         if (metaPaths != null) SortByMeta(items, metaPaths, col == SortColumn.Size, ct);
         if (sort.Descending) Array.Reverse(items);
+        if (sort.FoldersFirst) FoldersFirst(items, vols);
         return new SearchResult(items, sw.Elapsed, note, vols);
     }
 
@@ -293,6 +295,20 @@ internal sealed class SearchEngine
         {
             ArrayPool<int>.Shared.Return(keys);
         }
+    }
+
+    /// <summary>순서를 유지한 채 폴더를 앞으로 모읍니다.</summary>
+    private static void FoldersFirst(long[] items, VolumeIndex?[] vols)
+    {
+        var files = new List<long>();
+        int n = 0;
+        foreach (long k in items)
+        {
+            var v = vols[SearchResult.Volume(k)];
+            if (v != null && v.Entries[SearchResult.Index(k)].IsDirectory) items[n++] = k;
+            else files.Add(k);
+        }
+        files.CopyTo(items, n);
     }
 
     private static bool SameVolumes(VolumeIndex?[] a, VolumeIndex?[] b)

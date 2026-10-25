@@ -163,6 +163,19 @@ internal sealed class IndexManager : IDisposable
         StatusChanged?.Invoke();
     }
 
+    /// <summary>드라이브 루트("C:\")의 번호. 목록에 없으면 -1.</summary>
+    public int SlotOf(string root)
+    {
+        lock (_gate)
+            return _slots.Find(x => string.Equals(x.Root, root, StringComparison.OrdinalIgnoreCase))?.Number ?? -1;
+    }
+
+    public bool IsSelected(string root)
+    {
+        lock (_gate)
+            return _slots.Find(x => string.Equals(x.Root, root, StringComparison.OrdinalIgnoreCase))?.Selected ?? false;
+    }
+
     /// <summary>검색할 드라이브 번호 표 (SearchEngine.Search에 넘김).</summary>
     public bool[] GetSearchFilter()
     {

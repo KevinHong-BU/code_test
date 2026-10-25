@@ -152,6 +152,39 @@ internal sealed class VolumeIndex
         return len;
     }
 
+    /// <summary>
+    /// 경로("C:\Users\kim")에 해당하는 폴더 번호를 찾습니다 (-1 = 드라이브 루트).
+    /// 끝까지 찾지 못하면 존재하는 가장 깊은 상위 폴더를 돌려주고 exact = false.
+    /// 폴더 단계마다 전체 항목을 한 번 훑으므로, 색인을 새로 만든 뒤처럼 가끔만 씁니다.
+    /// </summary>
+    public int FindDirectory(string path, out bool exact)
+    {
+        exact = true;
+        if (!path.StartsWith(Root, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(path.TrimEnd('\\') + "\\", Root, StringComparison.OrdinalIgnoreCase))
+        {
+            exact = false;
+            return -1;
+        }
+        var parts = path.Length > Root.Length
+            ? path[Root.Length..].Split('\\', StringSplitOptions.RemoveEmptyEntries)
+            : Array.Empty<string>();
+        int cur = -1;
+        foreach (var part in parts)
+        {
+            int next = -2;
+            for (int i = 0; i < Count; i++)
+            {
+                ref readonly Entry e = ref Entries[i];
+                if (e.Parent != cur || !e.IsDirectory || e.IsDeleted) continue;
+                if (GetName(i).Equals(part.AsSpan(), StringComparison.OrdinalIgnoreCase)) { next = i; break; }
+            }
+            if (next == -2) { exact = false; return cur; }
+            cur = next;
+        }
+        return cur;
+    }
+
     // ───────────────────────── 만들기 (쓰기 잠금 안에서 호출) ─────────────────────────
 
     public int Add(ReadOnlySpan<char> name, int parent, uint attributes)

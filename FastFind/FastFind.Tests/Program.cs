@@ -88,6 +88,48 @@ foreach (var qs in queries) {
     Check(dPath.ToHashSet().SetEquals(onlyD), "d:\\ path filter");
 }
 
+// folder scope: browse (children only) and search below a folder
+{
+    // 자식이 많은 폴더 하나 고르기
+    var childCount = new Dictionary<int, int>();
+    for (int i = 0; i < c.Count; i++) if (!c.Entries[i].IsDeleted && c.Entries[i].Parent >= 0)
+        childCount[c.Entries[i].Parent] = childCount.GetValueOrDefault(c.Entries[i].Parent) + 1;
+    int dir = childCount.OrderByDescending(kv => kv.Value).First().Key;
+
+    bool Below(VolumeIndex v, int i, int d) { for (int p = v.Entries[i].Parent, g = 0; p >= 0 && g < 5000; p = v.Entries[p].Parent, g++) if (p == d) return true; return false; }
+
+    // 폴더 내용 (검색어 없음)
+    var qb = Query.Parse("", TargetKind.All, false);
+    qb.AddScope(new ScopeCondition(c, dir, childrenOnly: true));
+    var browse = engine.Search(qb, new SortSpec(SortColumn.Name, false, FoldersFirst: true), CancellationToken.None).Items;
+    var expBrowse = Enumerable.Range(0, c.Count).Where(i => !c.Entries[i].IsDeleted && c.Entries[i].Parent == dir).Select(i => SearchResult.Key(0, i)).ToHashSet();
+    Check(browse.ToHashSet().SetEquals(expBrowse), $"browse children {browse.Length} vs {expBrowse.Count}");
+    bool seenFile = false, foldersFirstOk = true;
+    foreach (var k in browse) { bool isDir = c.Entries[SearchResult.Index(k)].IsDirectory; if (!isDir) seenFile = true; else if (seenFile) foldersFirstOk = false; }
+    Check(foldersFirstOk, "folders first");
+
+    // 폴더 아래 전체에서 찾기
+    var qs = Query.Parse("report", TargetKind.All, false);
+    qs.AddScope(new ScopeCondition(c, dir, childrenOnly: false));
+    var below = engine.Search(qs, new SortSpec(SortColumn.Name, false), CancellationToken.None).Items;
+    var expBelow = Enumerable.Range(0, c.Count).Where(i => !c.Entries[i].IsDeleted && Below(c, i, dir) &&
+        VolumeIndex.Fold(c.GetName(i).ToString()).Contains("REPORT")).Select(i => SearchResult.Key(0, i)).ToHashSet();
+    Check(below.ToHashSet().SetEquals(expBelow), $"scope below {below.Length} vs {expBelow.Count}");
+
+    // 다른 드라이브 항목은 범위에 들어오지 않음
+    var qd = Query.Parse("report", TargetKind.All, false);
+    qd.AddScope(new ScopeCondition(c, -1, childrenOnly: false));
+    var whole = engine.Search(qd, new SortSpec(SortColumn.Name, false), CancellationToken.None).Items;
+    Check(whole.All(k => SearchResult.Volume(k) == 0) && whole.Length > 0, "scope drive root");
+
+    // 경로로 폴더 찾기
+    string path = c.GetDirectoryPath(dir);
+    Check(c.FindDirectory(path, out bool exact) == dir && exact, "find dir " + path);
+    Check(c.FindDirectory(path.ToLowerInvariant().TrimEnd('\\'), out exact) == dir && exact, "find dir case/trailing");
+    Check(c.FindDirectory(path + "no_such_folder_zz\\", out exact) == dir && !exact, "find dir nearest");
+    Check(c.FindDirectory(@"C:\", out exact) == -1 && exact, "find root");
+}
+
 // literal semantics vs naive
 foreach (var (qs, mc) in new[] { ("report", false), ("Report", true), ("img 20", false), ("사진 final", false) }) {
     var terms = qs.Split(' ');
