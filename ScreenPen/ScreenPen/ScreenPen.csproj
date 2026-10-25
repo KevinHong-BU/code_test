@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ScreenPen</RootNamespace>
+    <AssemblyName>ScreenPen</AssemblyName>
+    <Product>화면 판서 (ScreenPen)</Product>
+    <Version>1.0.0</Version>
+
+    <!-- 고해상도(배율 125%, 150% 등) 모니터에서도 캡처 좌표와 화면 좌표가 일치하도록 설정 -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationDefaultFont>Malgun Gothic, 9pt</ApplicationDefaultFont>
+
+    <!-- Windows 이외의 OS에서 빌드 확인용 (Windows/Visual Studio에서는 영향 없음) -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+</Project>

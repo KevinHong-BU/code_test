@@ -57,3 +57,9 @@ app/src/main/java/com/kevinhong/schedule/
 - `SCHEDULE_EXACT_ALARM`: 정확한 시간 알림용. Android 14+에서는 기본 거부 상태이며, 이 경우
   알림은 시스템 사정에 따라 약간 늦게 울릴 수 있습니다. 정확한 알림을 원하면
   `설정 > 앱 > 내 스케줄 > 알람 및 리마인더`에서 허용하세요.
+
+---
+
+## 다른 프로젝트
+
+- [`ScreenPen/`](ScreenPen/README.md) — Windows 화면 판서 프로그램 (C# WinForms, Visual Studio Community)
